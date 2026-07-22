@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext'
 import { useHelia } from '../context/HeliaContext'
 import { useProfileStats } from '../hooks/useProfileStats'
 import { useUserPosts } from '../hooks/useUserPosts'
+import { useUserReposts } from '../hooks/useUserReposts'
 import { useUpdateProfilePhoto } from '../hooks/useUpdateProfilePhoto'
 import { AuthForms } from '../components/AuthForms'
 import { ProfileHeader } from '../components/ProfileHeader'
@@ -13,6 +14,7 @@ export function Profile() {
   const { ready: heliaReady, error: heliaError, retry } = useHelia()
   const stats = useProfileStats(pubkey)
   const userPosts = useUserPosts(pubkey)
+  const userReposts = useUserReposts(pubkey)
   const photo = useUpdateProfilePhoto()
 
   const postsCount = Math.max(stats.postsCount, userPosts.posts.length)
@@ -64,12 +66,15 @@ export function Profile() {
             followingCount={stats.followingCount}
             followers={stats.followers}
             following={stats.following}
-            loading={stats.loading || userPosts.loading}
+            loading={
+              stats.loading || userPosts.loading || userReposts.loading
+            }
             photoBusy={photo.busy}
             onLogout={logout}
             onRefresh={() => {
               void stats.refresh()
               void userPosts.refresh()
+              void userReposts.refresh()
               void photo.load()
             }}
             onChangePhoto={async (file) => {
@@ -85,9 +90,13 @@ export function Profile() {
 
           <ProfilePostsGrid
             posts={userPosts.posts}
+            reposts={userReposts.posts}
             loading={userPosts.loading}
+            repostsLoading={userReposts.loading}
             error={userPosts.error}
-            onRefresh={() => void userPosts.refresh()}
+            repostsError={userReposts.error}
+            onRefreshPosts={() => void userPosts.refresh()}
+            onRefreshReposts={() => void userReposts.refresh()}
           />
         </>
       )}

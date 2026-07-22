@@ -79,9 +79,23 @@ export async function getCachedProfile(
 export async function fetchAndCacheProfile(
   pubkey: string,
 ): Promise<ResolvedProfile> {
+  const existing = await db.profiles.get(pubkey)
   const meta = await fetchProfileMetadata(pubkey)
   const local = await getAccountByPubkey(pubkey)
   const row = metadataToProfileRow(pubkey, meta)
+
+  // Keep richer local/cache fields when relays return sparse Kind 0
+  if (!row.username && existing?.username) {
+    row.username = existing.username
+  }
+  if (!row.displayName && existing?.displayName) {
+    row.displayName = existing.displayName
+  }
+  if (!row.picture && existing?.picture) {
+    row.picture = existing.picture
+    row.pictureCid = existing.pictureCid
+  }
+
   if (!row.username && local) {
     row.username = local.username
     row.displayName = row.displayName ?? local.username

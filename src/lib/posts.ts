@@ -28,6 +28,17 @@ export interface FeedPost {
   comments: number
   score: number
   raw: Event
+  /** When set, this feed item is a Kind 6 repost of the original `raw` post */
+  repost?: {
+    id: string
+    pubkey: string
+    createdAt: number
+  }
+}
+
+/** React list key — unique per original post OR per repost appearance */
+export function feedItemKey(post: FeedPost): string {
+  return post.repost ? `repost:${post.repost.id}` : post.id
 }
 
 export function buildMediaEventTemplate(opts: {
@@ -90,6 +101,37 @@ export function buildLikeEvent(target: Event): EventTemplate {
       ['e', target.id],
       ['p', target.pubkey],
       ['k', String(target.kind)],
+    ],
+  }
+}
+
+/** NIP-18 Kind 6 repost — followers of the reposter can discover the original. */
+export function buildRepostEvent(target: Event): EventTemplate {
+  return {
+    kind: 6,
+    created_at: Math.floor(Date.now() / 1000),
+    content: JSON.stringify(target),
+    tags: [
+      ['e', target.id],
+      ['p', target.pubkey],
+      ['k', String(target.kind)],
+      ['client', 'aazaad'],
+    ],
+  }
+}
+
+/** NIP-09 Kind 5 — delete one or more of your own events (unlike / unrepost). */
+export function buildDeletionEvent(
+  eventIds: string[],
+  reason = 'undo',
+): EventTemplate {
+  return {
+    kind: 5,
+    created_at: Math.floor(Date.now() / 1000),
+    content: reason,
+    tags: [
+      ...eventIds.map((id) => ['e', id] as [string, string]),
+      ['client', 'aazaad'],
     ],
   }
 }
@@ -183,11 +225,18 @@ export function scorePost(
 
 export function rankPosts(posts: FeedPost[], nowSec?: number): FeedPost[] {
   return [...posts]
-    .map((p) => ({
-      ...p,
-      score: scorePost(p.likes, p.comments, p.createdAt, nowSec),
-    }))
-    .sort((a, b) => b.score - a.score || b.createdAt - a.createdAt)
+    .map((p) => {
+      const effectiveCreated = p.repost?.createdAt ?? p.createdAt
+      return {
+        ...p,
+        score: scorePost(p.likes, p.comments, effectiveCreated, nowSec),
+      }
+    })
+    .sort((a, b) => {
+      const aTime = a.repost?.createdAt ?? a.createdAt
+      const bTime = b.repost?.createdAt ?? b.createdAt
+      return b.score - a.score || bTime - aTime
+    })
 }
 
 export async function fetchRecentPostEvents(
@@ -269,6 +318,141 @@ export async function fetchAuthorsMediaEvents(
     byId.set(event.id, event)
   }
   return [...byId.values()].filter((e) => parseFeedPost(e) !== null)
+}
+
+/** Fetch Kind 6 reposts authored by these pubkeys. */
+export async function fetchRepostEventsByAuthors(
+  authors: string[],
+  relays: readonly string[] = DEFAULT_RELAYS,
+  maxWait = 5000,
+): Promise<Event[]> {
+  const unique = [...new Set(authors.filter(Boolean))]
+  if (unique.length === 0) return []
+
+  const pool = getPool()
+  const relayList = [...relays]
+  const chunkSize = 25
+  const batches: Event[][] = []
+
+  for (let i = 0; i < unique.length; i += chunkSize) {
+    const chunk = unique.slice(i, i + chunkSize)
+    batches.push(
+      await pool.querySync(
+        relayList,
+        { kinds: [6], authors: chunk, limit: 80 },
+        { maxWait },
+      ),
+    )
+  }
+
+  const byId = new Map<string, Event>()
+  for (const event of batches.flat()) {
+    if (event.kind === 6) byId.set(event.id, event)
+  }
+  return [...byId.values()]
+}
+
+export function parseRepostPointers(event: Event): {
+  originalEventId: string
+  originalPubkey: string
+  embedded: Event | null
+} | null {
+  if (event.kind !== 6) return null
+  const eTag = event.tags.find((t) => t[0] === 'e' && t[1])
+  const pTag = event.tags.find((t) => t[0] === 'p' && t[1])
+  if (!eTag?.[1]) return null
+
+  let embedded: Event | null = null
+  if (event.content?.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(event.content) as Event
+      if (parsed?.id && parsed?.pubkey) embedded = parsed
+    } catch {
+      embedded = null
+    }
+  }
+
+  return {
+    originalEventId: eTag[1],
+    originalPubkey: pTag?.[1] ?? embedded?.pubkey ?? '',
+    embedded,
+  }
+}
+
+/** Fetch events by id (for resolving repost targets). */
+export async function fetchEventsByIds(
+  ids: string[],
+  relays: readonly string[] = DEFAULT_RELAYS,
+  maxWait = 5000,
+): Promise<Event[]> {
+  const unique = [...new Set(ids.filter(Boolean))]
+  if (unique.length === 0) return []
+
+  const pool = getPool()
+  const relayList = [...relays]
+  const chunkSize = 40
+  const batches: Event[][] = []
+
+  for (let i = 0; i < unique.length; i += chunkSize) {
+    const chunk = unique.slice(i, i + chunkSize)
+    batches.push(
+      await pool.querySync(relayList, { ids: chunk, limit: chunk.length }, { maxWait }),
+    )
+  }
+
+  const byId = new Map<string, Event>()
+  for (const event of batches.flat()) {
+    byId.set(event.id, event)
+  }
+  return [...byId.values()]
+}
+
+/**
+ * Turn Kind 6 events into FeedPost items pointing at the original media.
+ */
+export async function hydrateRepostsToFeedPosts(
+  repostEvents: Event[],
+  relays: readonly string[] = DEFAULT_RELAYS,
+): Promise<FeedPost[]> {
+  const pointers = repostEvents
+    .map((event) => {
+      const ptr = parseRepostPointers(event)
+      return ptr ? { event, ...ptr } : null
+    })
+    .filter((p): p is NonNullable<typeof p> => p !== null)
+
+  const embeddedById = new Map<string, Event>()
+  const needFetch: string[] = []
+
+  for (const ptr of pointers) {
+    if (ptr.embedded && parseFeedPost(ptr.embedded)) {
+      embeddedById.set(ptr.originalEventId, ptr.embedded)
+    } else {
+      needFetch.push(ptr.originalEventId)
+    }
+  }
+
+  const fetched = await fetchEventsByIds(needFetch, relays)
+  for (const event of fetched) {
+    embeddedById.set(event.id, event)
+  }
+
+  const posts: FeedPost[] = []
+  for (const ptr of pointers) {
+    const original = embeddedById.get(ptr.originalEventId)
+    if (!original) continue
+    const parsed = parseFeedPost(original)
+    if (!parsed) continue
+    posts.push({
+      ...parsed,
+      repost: {
+        id: ptr.event.id,
+        pubkey: ptr.event.pubkey,
+        createdAt: ptr.event.created_at,
+      },
+    })
+  }
+  return posts
 }
 
 export async function fetchLikesFor(

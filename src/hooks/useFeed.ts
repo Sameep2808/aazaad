@@ -4,8 +4,10 @@ import {
   fetchAuthorsMediaEvents,
   fetchCommentsFor,
   fetchLikesFor,
+  fetchRepostEventsByAuthors,
   parseFeedPost,
   rankPosts,
+  feedItemKey,
   type FeedPost,
 } from '../lib/posts'
 import {
@@ -15,13 +17,16 @@ import {
   mergePosts,
   updateCachedEngagement,
 } from '../lib/postCache'
+import {
+  loadCachedRepostFeedPosts,
+  resolveAndCacheReposts,
+} from '../lib/repostCache'
 
 export interface UseFeedResult {
   posts: FeedPost[]
   loading: boolean
   error: string | null
   refresh: () => Promise<void>
-  /** Instant local engagement update (likes/comments) without waiting on relays */
   applyEngagement: (
     postId: string,
     patch: { likes?: number; comments?: number },
@@ -29,7 +34,7 @@ export interface UseFeedResult {
 }
 
 async function withEngagement(posts: FeedPost[]): Promise<FeedPost[]> {
-  const ids = posts.map((p) => p.id)
+  const ids = [...new Set(posts.map((p) => p.id))]
   const [likes, comments] = await Promise.all([
     fetchLikesFor(ids),
     fetchCommentsFor(ids),
@@ -42,6 +47,26 @@ async function withEngagement(posts: FeedPost[]): Promise<FeedPost[]> {
     likes: Math.max(post.likes, likeCounts.get(post.id) ?? 0),
     comments: Math.max(post.comments, commentCounts.get(post.id) ?? 0),
   }))
+}
+
+function mergeFeedItems(...lists: FeedPost[][]): FeedPost[] {
+  const byKey = new Map<string, FeedPost>()
+  for (const list of lists) {
+    for (const post of list) {
+      const key = feedItemKey(post)
+      const prev = byKey.get(key)
+      if (!prev) {
+        byKey.set(key, post)
+        continue
+      }
+      byKey.set(key, {
+        ...post,
+        likes: Math.max(post.likes, prev.likes),
+        comments: Math.max(post.comments, prev.comments),
+      })
+    }
+  }
+  return [...byKey.values()]
 }
 
 export function useFeed(
@@ -94,29 +119,46 @@ export function useFeed(
     const allowedAuthors = [viewerPubkey, ...followingList]
 
     try {
-      const cached = filterFollowingFeed(
-        await loadCachedPosts(),
-        viewerPubkey,
-        followingList,
-      )
-      if (cached.length > 0) {
-        setPosts(rankPosts(cached))
+      const [cachedPosts, cachedReposts] = await Promise.all([
+        filterFollowingFeed(
+          await loadCachedPosts(),
+          viewerPubkey,
+          followingList,
+        ),
+        loadCachedRepostFeedPosts(allowedAuthors),
+      ])
+
+      const cachedFeed = mergeFeedItems(cachedPosts, cachedReposts)
+      if (cachedFeed.length > 0) {
+        setPosts(rankPosts(cachedFeed))
       } else {
         setPosts([])
       }
 
-      const events = await fetchAuthorsMediaEvents(allowedAuthors)
-      const remote = events
+      const [mediaEvents, repostEvents] = await Promise.all([
+        fetchAuthorsMediaEvents(allowedAuthors),
+        fetchRepostEventsByAuthors(allowedAuthors),
+      ])
+
+      const remotePosts = mediaEvents
         .map(parseFeedPost)
         .filter((p): p is FeedPost => p !== null)
 
-      await cachePostsFromEvents(events)
+      await cachePostsFromEvents(mediaEvents)
+      const remoteReposts = await resolveAndCacheReposts(repostEvents)
 
-      const merged = filterFollowingFeed(
-        mergePosts(cached, remote),
+      const originals = filterFollowingFeed(
+        mergePosts(cachedPosts, remotePosts),
         viewerPubkey,
         followingList,
       )
+
+      // Reposts from people you follow (and yourself) — so their followers see them
+      const reposts = mergeFeedItems(cachedReposts, remoteReposts).filter(
+        (p) => p.repost && allowedAuthors.includes(p.repost.pubkey),
+      )
+
+      const merged = mergeFeedItems(originals, reposts)
       const engaged = await withEngagement(merged)
       for (const post of engaged) {
         void updateCachedEngagement(post.id, {
@@ -124,10 +166,11 @@ export function useFeed(
           comments: post.comments,
         })
       }
+
       setPosts((prev) => {
-        const prevById = new Map(prev.map((p) => [p.id, p]))
+        const prevByKey = new Map(prev.map((p) => [feedItemKey(p), p]))
         const mergedEngaged = engaged.map((post) => {
-          const local = prevById.get(post.id)
+          const local = prevByKey.get(feedItemKey(post))
           return {
             ...post,
             likes: Math.max(post.likes, local?.likes ?? 0),
@@ -137,13 +180,17 @@ export function useFeed(
         return rankPosts(mergedEngaged)
       })
     } catch (err) {
-      const cached = filterFollowingFeed(
-        await loadCachedPosts(),
-        viewerPubkey,
-        followingList,
-      )
-      if (cached.length > 0) {
-        setPosts(rankPosts(cached))
+      const [cachedPosts, cachedReposts] = await Promise.all([
+        filterFollowingFeed(
+          await loadCachedPosts(),
+          viewerPubkey,
+          followingList,
+        ),
+        loadCachedRepostFeedPosts(allowedAuthors),
+      ])
+      const cachedFeed = mergeFeedItems(cachedPosts, cachedReposts)
+      if (cachedFeed.length > 0) {
+        setPosts(rankPosts(cachedFeed))
         setError('Relays unreachable — showing cached following feed')
       } else {
         setError(err instanceof Error ? err.message : 'Failed to load feed')

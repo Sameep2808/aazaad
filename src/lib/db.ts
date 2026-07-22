@@ -54,6 +54,33 @@ export interface ProfileRow {
   updatedAt: number
 }
 
+/** Cached Kind 6 repost events */
+export interface CachedRepostRow {
+  id: string
+  reposterPubkey: string
+  originalEventId: string
+  originalPubkey: string
+  createdAt: number
+  eventJson: string
+  /** Stringified original event when known */
+  originalEventJson: string | null
+  /** 1 = active repost, 0 = unreposted (NIP-09 deleted) */
+  active: number
+  updatedAt: number
+}
+
+/** Current user's Kind 7 likes (one per post). */
+export interface MyLikeRow {
+  /** `${pubkey}:${postId}` */
+  key: string
+  pubkey: string
+  postId: string
+  likeEventId: string
+  /** 1 = liked, 0 = unliked */
+  active: number
+  updatedAt: number
+}
+
 class AazaadDB extends Dexie {
   follows!: Table<FollowCacheRow, string>
   seeds!: Table<SeededCidRow, string>
@@ -61,6 +88,8 @@ class AazaadDB extends Dexie {
   profileStats!: Table<ProfileStatsCacheRow, string>
   posts!: Table<CachedPostRow, string>
   profiles!: Table<ProfileRow, string>
+  reposts!: Table<CachedRepostRow, string>
+  myLikes!: Table<MyLikeRow, string>
 
   constructor() {
     super('aazaad')
@@ -105,6 +134,44 @@ class AazaadDB extends Dexie {
       profileStats: 'pubkey, updatedAt',
       posts: 'id, pubkey, createdAt, cid, updatedAt',
       profiles: 'pubkey, updatedAt',
+    })
+    this.version(6).stores({
+      follows: 'pubkey, updatedAt',
+      seeds: 'cid, pinnedAt',
+      accounts: 'username, pubkey, createdAt',
+      profileStats: 'pubkey, updatedAt',
+      posts: 'id, pubkey, createdAt, cid, updatedAt',
+      profiles: 'pubkey, updatedAt',
+      reposts: 'id, reposterPubkey, originalEventId, createdAt, updatedAt',
+    })
+    this.version(7)
+      .stores({
+        follows: 'pubkey, updatedAt',
+        seeds: 'cid, pinnedAt',
+        accounts: 'username, pubkey, createdAt',
+        profileStats: 'pubkey, updatedAt',
+        posts: 'id, pubkey, createdAt, cid, updatedAt',
+        profiles: 'pubkey, updatedAt',
+        reposts: 'id, reposterPubkey, originalEventId, createdAt, updatedAt',
+        myLikes: 'key, pubkey, postId, active, updatedAt',
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table('reposts')
+          .toCollection()
+          .modify((row: Record<string, unknown>) => {
+            if (typeof row.active !== 'number') row.active = 1
+          })
+      })
+    this.version(8).stores({
+      follows: 'pubkey, updatedAt',
+      seeds: 'cid, pinnedAt',
+      accounts: 'username, pubkey, createdAt',
+      profileStats: 'pubkey, updatedAt',
+      posts: 'id, pubkey, createdAt, cid, updatedAt',
+      profiles: 'pubkey, username, updatedAt',
+      reposts: 'id, reposterPubkey, originalEventId, createdAt, updatedAt',
+      myLikes: 'key, pubkey, postId, active, updatedAt',
     })
   }
 }

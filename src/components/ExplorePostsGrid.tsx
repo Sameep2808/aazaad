@@ -1,35 +1,30 @@
 import { useEffect, useState } from 'react'
-import { Grid3X3, Play, Repeat2 } from 'lucide-react'
+import { Play } from 'lucide-react'
 import { useHelia } from '../context/HeliaContext'
 import { useProfiles } from '../hooks/useProfiles'
 import { feedItemKey, type FeedPost } from '../lib/posts'
 import { IPFS_GATEWAYS, cidToGatewayUrl } from '../lib/media'
 import { loadCidAsObjectUrl } from '../lib/ipfs'
 import { PostCard } from './Feed'
+import type { EngageHandler } from '../hooks/useOptimisticEngagement'
 
-type ProfileTab = 'posts' | 'reposts'
-
-interface ProfilePostsGridProps {
+interface ExplorePostsGridProps {
   posts: FeedPost[]
-  reposts: FeedPost[]
   loading: boolean
-  repostsLoading: boolean
   error: string | null
-  repostsError: string | null
-  onRefreshPosts: () => void
-  onRefreshReposts: () => void
+  onRefresh: () => void
+  onEngage?: EngageHandler
+  emptyMessage?: string
 }
 
 function GridThumb({
   post,
   selected,
   onSelect,
-  showRepostBadge,
 }: {
   post: FeedPost
   selected: boolean
   onSelect: () => void
-  showRepostBadge?: boolean
 }) {
   const { helia, ready } = useHelia()
   const [src, setSrc] = useState(() => cidToGatewayUrl(post.cid))
@@ -50,7 +45,7 @@ function GridThumb({
           setSrc(url)
           return
         } catch {
-          // gateway fallback
+          // gateway
         }
       }
       setSrc(cidToGatewayUrl(post.cid, IPFS_GATEWAYS[0]))
@@ -94,109 +89,66 @@ function GridThumb({
           onError={() => setSrc(cidToGatewayUrl(post.cid, IPFS_GATEWAYS[1]))}
         />
       )}
-      {showRepostBadge && (
-        <span className="absolute left-1.5 top-1.5 rounded bg-black/60 p-0.5 text-white">
-          <Repeat2 className="h-3 w-3" />
-        </span>
-      )}
     </button>
   )
 }
 
-export function ProfilePostsGrid({
+export function ExplorePostsGrid({
   posts,
-  reposts,
   loading,
-  repostsLoading,
   error,
-  repostsError,
-  onRefreshPosts,
-  onRefreshReposts,
-}: ProfilePostsGridProps) {
-  const [tab, setTab] = useState<ProfileTab>('posts')
+  onRefresh,
+  onEngage,
+  emptyMessage = 'No discovery posts yet. Follow more people to unlock Explore.',
+}: ExplorePostsGridProps) {
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
-
-  const items = tab === 'posts' ? posts : reposts
-  const isLoading = tab === 'posts' ? loading : repostsLoading
-  const tabError = tab === 'posts' ? error : repostsError
-  const selected = items.find((p) => feedItemKey(p) === selectedKey) ?? null
-
+  const selected = posts.find((p) => feedItemKey(p) === selectedKey) ?? null
   const authorKeys = selected
-    ? [selected.pubkey, selected.repost?.pubkey].filter(Boolean) as string[]
+    ? ([selected.pubkey, selected.repost?.pubkey].filter(Boolean) as string[])
     : []
   const { get: getProfile } = useProfiles(authorKeys)
 
   useEffect(() => {
-    setSelectedKey(null)
-  }, [tab])
-
-  useEffect(() => {
-    if (selectedKey && !items.some((p) => feedItemKey(p) === selectedKey)) {
+    if (selectedKey && !posts.some((p) => feedItemKey(p) === selectedKey)) {
       setSelectedKey(null)
     }
-  }, [items, selectedKey])
+  }, [posts, selectedKey])
 
   return (
     <section className="space-y-3">
-      <div className="flex border-b border-zinc-800">
+      <div className="flex items-center justify-between px-1">
+        <div>
+          <h2 className="text-sm font-semibold text-zinc-100">Discover</h2>
+          <p className="text-[11px] text-zinc-500">
+            Posts from people who follow accounts you follow
+          </p>
+        </div>
         <button
           type="button"
-          onClick={() => setTab('posts')}
-          className={[
-            'flex flex-1 items-center justify-center gap-1.5 py-2.5 text-xs font-semibold uppercase tracking-wide',
-            tab === 'posts'
-              ? 'border-b-2 border-white text-white'
-              : 'text-zinc-500',
-          ].join(' ')}
-        >
-          <Grid3X3 className="h-4 w-4" />
-          Posts
-        </button>
-        <button
-          type="button"
-          onClick={() => setTab('reposts')}
-          className={[
-            'flex flex-1 items-center justify-center gap-1.5 py-2.5 text-xs font-semibold uppercase tracking-wide',
-            tab === 'reposts'
-              ? 'border-b-2 border-white text-white'
-              : 'text-zinc-500',
-          ].join(' ')}
-        >
-          <Repeat2 className="h-4 w-4" />
-          Reposts
-        </button>
-      </div>
-
-      <div className="flex items-center justify-end">
-        <button
-          type="button"
-          onClick={() =>
-            tab === 'posts' ? onRefreshPosts() : onRefreshReposts()
-          }
+          onClick={onRefresh}
           className="text-xs text-zinc-400 underline"
         >
-          {isLoading ? 'Refreshing…' : 'Refresh'}
+          {loading ? 'Refreshing…' : 'Refresh'}
         </button>
       </div>
 
-      {tabError && <p className="text-xs text-amber-400">{tabError}</p>}
+      {error && <p className="px-1 text-xs text-amber-400">{error}</p>}
 
-      {items.length === 0 && !isLoading ? (
-        <p className="py-8 text-center text-sm text-zinc-500">
-          {tab === 'posts'
-            ? 'No posts yet. Upload a photo or video to see it here.'
-            : 'No reposts yet. Repost something from Home or Reels.'}
+      {loading && posts.length === 0 ? (
+        <p className="py-10 text-center text-sm text-zinc-500">
+          Loading explore posts…
         </p>
+      ) : posts.length === 0 ? (
+        <p className="py-10 text-center text-sm text-zinc-500">{emptyMessage}</p>
       ) : (
         <div className="grid grid-cols-3 gap-0.5">
-          {items.map((post) => {
+          {posts.map((post) => {
             const key = feedItemKey(post)
             return (
               <GridThumb
                 key={key}
                 post={post}
                 selected={key === selectedKey}
-                showRepostBadge={tab === 'reposts'}
                 onSelect={() =>
                   setSelectedKey((cur) => (cur === key ? null : key))
                 }
@@ -216,9 +168,7 @@ export function ProfilePostsGrid({
                 ? getProfile(selected.repost.pubkey)
                 : undefined
             }
-            onChanged={() =>
-              tab === 'posts' ? onRefreshPosts() : onRefreshReposts()
-            }
+            onEngage={onEngage}
           />
         </div>
       )}

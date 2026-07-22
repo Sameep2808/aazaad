@@ -36,6 +36,40 @@ export function hexToNpub(hexPubkey: string): string {
   return npubEncode(hexPubkey)
 }
 
+const HEX_PUBKEY_RE = /^[0-9a-f]{64}$/i
+
+/** Decode npub / nprofile / hex pubkey → 64-char hex. Returns null if invalid. */
+export function decodePubkey(input: string): string | null {
+  const raw = input.trim()
+  if (!raw) return null
+  if (HEX_PUBKEY_RE.test(raw)) return raw.toLowerCase()
+
+  try {
+    if (raw.startsWith('npub1') || raw.startsWith('nprofile1')) {
+      const decoded = decode(raw)
+      if (decoded.type === 'npub') return decoded.data
+      if (decoded.type === 'nprofile') return decoded.data.pubkey
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
+/** Build / replace Kind 3 contact list (follow graph). */
+export function buildContactListEvent(following: string[]): EventTemplate {
+  const unique = [...new Set(following.filter((pk) => HEX_PUBKEY_RE.test(pk)))]
+  return {
+    kind: 3,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [
+      ...unique.map((pk) => ['p', pk.toLowerCase()]),
+      ['client', 'aazaad'],
+    ],
+    content: '',
+  }
+}
+
 export function hexToNsec(secretKey: Uint8Array): string {
   return nsecEncode(secretKey)
 }

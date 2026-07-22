@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Heart, MessageCircle, Radio } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Heart, MessageCircle, PlusSquare, Radio, Repeat2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useIPFSSeed } from '../hooks/useIPFSSeed'
 import {
@@ -7,9 +7,12 @@ import {
   type EngageHandler,
 } from '../hooks/useOptimisticEngagement'
 import { useProfiles } from '../hooks/useProfiles'
-import type { FeedPost } from '../lib/posts'
+import { useRepost } from '../hooks/useRepost'
+import { feedItemKey, type FeedPost } from '../lib/posts'
 import type { ResolvedProfile } from '../lib/profiles'
-import { AutoMedia } from './AutoMedia'
+import { displayHandle } from '../lib/profiles'
+import { AutoMedia, type AutoMediaHandle } from './AutoMedia'
+import { DoubleTapLikeLayer } from './DoubleTapLikeLayer'
 import { PostAuthorBar } from './UserAvatar'
 
 interface ReelsProps {
@@ -24,16 +27,30 @@ function ReelSlide({
   post,
   root,
   profile,
+  reposterProfile,
   onEngage,
 }: {
   post: FeedPost
   root: Element | null
   profile?: ResolvedProfile | null
+  reposterProfile?: ResolvedProfile | null
   onEngage?: EngageHandler
 }) {
   const { seed, seeding } = useIPFSSeed()
-  const { likes, comments, busy, error, like, comment } =
-    useOptimisticEngagement(post, onEngage)
+  const {
+    likes,
+    comments,
+    liked,
+    likeBusy,
+    busy,
+    error,
+    like,
+    likeOnly,
+    comment,
+  } = useOptimisticEngagement(post, onEngage)
+  const { toggleRepost, busyId, error: repostError, isReposted, hydrate } =
+    useRepost()
+  const mediaRef = useRef<AutoMediaHandle>(null)
   const [showComment, setShowComment] = useState(false)
   const [commentText, setCommentText] = useState('')
   const [seeded, setSeeded] = useState(false)
@@ -42,6 +59,22 @@ function ReelSlide({
   useEffect(() => {
     if (error) setMsg(error)
   }, [error])
+
+  useEffect(() => {
+    if (repostError) setMsg(repostError)
+  }, [repostError])
+
+  useEffect(() => {
+    void hydrate([post.id])
+  }, [post.id, hydrate])
+
+  const onDoubleTapLike = useCallback(() => {
+    void likeOnly()
+  }, [likeOnly])
+
+  const onSingleTapMedia = useCallback(() => {
+    mediaRef.current?.togglePlayPause()
+  }, [])
 
   async function onSeed() {
     try {
@@ -53,16 +86,40 @@ function ReelSlide({
     }
   }
 
+  const alreadyReposted = isReposted(post.id)
+
   return (
     <section className="relative h-full w-full bg-black">
-      <AutoMedia
-        post={post}
-        variant="reel"
-        root={root}
+      <DoubleTapLikeLayer
         className="absolute inset-0 h-full w-full"
-      />
+        onLike={onDoubleTapLike}
+        onSingleTap={onSingleTapMedia}
+      >
+        <AutoMedia
+          ref={mediaRef}
+          post={post}
+          variant="reel"
+          root={root}
+          className="h-full w-full"
+        />
+      </DoubleTapLikeLayer>
 
       <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent px-4 pb-20 pt-24">
+        {post.repost && (
+          <p className="pointer-events-auto mb-1 flex items-center gap-1 text-xs font-medium text-white/70">
+            <Repeat2 className="h-3.5 w-3.5" />
+            {displayHandle(
+              reposterProfile ?? {
+                pubkey: post.repost.pubkey,
+                username: null,
+                displayName: null,
+                pictureUrl: null,
+                pictureCid: null,
+              },
+            )}{' '}
+            reposted
+          </p>
+        )}
         <div className="pointer-events-auto mb-2 max-w-[75%]">
           <PostAuthorBar profile={profile} pubkey={post.pubkey} variant="reel" />
         </div>
@@ -74,14 +131,19 @@ function ReelSlide({
         {msg && <p className="mt-1 text-xs text-white/70">{msg}</p>}
       </div>
 
-      <div className="absolute bottom-24 right-3 z-10 flex flex-col items-center gap-5">
+      <div className="absolute bottom-24 right-3 z-10 flex flex-col items-center gap-4">
         <button
           type="button"
+          disabled={likeBusy}
           onClick={() => void like()}
-          className="flex flex-col items-center gap-1 text-white"
+          className={[
+            'flex touch-manipulation flex-col items-center gap-1 active:opacity-70',
+            liked ? 'text-red-400' : 'text-white',
+          ].join(' ')}
+          aria-pressed={liked}
         >
           <span className="rounded-full bg-black/35 p-3 backdrop-blur-sm">
-            <Heart className="h-6 w-6" />
+            <Heart className="h-7 w-7" fill={liked ? 'currentColor' : 'none'} />
           </span>
           <span className="text-xs font-medium">{likes}</span>
         </button>
@@ -89,22 +151,45 @@ function ReelSlide({
         <button
           type="button"
           onClick={() => setShowComment((v) => !v)}
-          className="flex flex-col items-center gap-1 text-white"
+          className="flex touch-manipulation flex-col items-center gap-1 text-white active:opacity-70"
         >
           <span className="rounded-full bg-black/35 p-3 backdrop-blur-sm">
-            <MessageCircle className="h-6 w-6" />
+            <MessageCircle className="h-7 w-7" />
           </span>
           <span className="text-xs font-medium">{comments}</span>
         </button>
 
         <button
           type="button"
-          disabled={seeding || seeded}
-          onClick={() => void onSeed()}
-          className="flex flex-col items-center gap-1 text-emerald-300 disabled:opacity-50"
+          disabled={busyId === post.id}
+          onClick={() => {
+            void toggleRepost(post).then((result) => {
+              if (result === 'reposted') setMsg('Reposted')
+              else if (result === 'unreposted') setMsg('Removed repost')
+            })
+          }}
+          className={[
+            'flex touch-manipulation flex-col items-center gap-1 disabled:opacity-50 active:opacity-70',
+            alreadyReposted ? 'text-emerald-400' : 'text-white',
+          ].join(' ')}
+          aria-pressed={alreadyReposted}
         >
           <span className="rounded-full bg-black/35 p-3 backdrop-blur-sm">
-            <Radio className="h-6 w-6" />
+            <Repeat2 className="h-7 w-7" />
+          </span>
+          <span className="text-[10px] font-medium">
+            {alreadyReposted ? 'Reposted' : 'Repost'}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          disabled={seeding || seeded}
+          onClick={() => void onSeed()}
+          className="flex touch-manipulation flex-col items-center gap-1 text-emerald-300 disabled:opacity-50 active:opacity-70"
+        >
+          <span className="rounded-full bg-black/35 p-3 backdrop-blur-sm">
+            <Radio className="h-7 w-7" />
           </span>
           <span className="text-[10px] font-medium">
             {seeded ? 'Seeded' : 'Seed'}
@@ -118,7 +203,7 @@ function ReelSlide({
             value={commentText}
             onChange={(e) => setCommentText(e.target.value)}
             placeholder="Add a comment…"
-            className="flex-1 rounded-full border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-white outline-none"
+            className="min-h-11 flex-1 rounded-full border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-white outline-none"
           />
           <button
             type="button"
@@ -131,7 +216,7 @@ function ReelSlide({
                 }
               })
             }}
-            className="rounded-full bg-white px-4 text-xs font-semibold text-zinc-900"
+            className="min-h-11 touch-manipulation rounded-full bg-white px-4 text-xs font-semibold text-zinc-900"
           >
             Post
           </button>
@@ -144,7 +229,14 @@ function ReelSlide({
 export function Reels({ posts, loading, error, onRefresh, onEngage }: ReelsProps) {
   const scrollerRef = useRef<HTMLDivElement | null>(null)
   const [root, setRoot] = useState<Element | null>(null)
-  const pubkeys = useMemo(() => posts.map((p) => p.pubkey), [posts])
+  const pubkeys = useMemo(() => {
+    const ids: string[] = []
+    for (const p of posts) {
+      ids.push(p.pubkey)
+      if (p.repost?.pubkey) ids.push(p.repost.pubkey)
+    }
+    return ids
+  }, [posts])
   const { get: getProfile } = useProfiles(pubkeys)
 
   useEffect(() => {
@@ -168,9 +260,9 @@ export function Reels({ posts, loading, error, onRefresh, onEngage }: ReelsProps
         </p>
         <Link
           to="/upload"
-          className="rounded-lg bg-white px-4 py-2 text-sm font-semibold text-zinc-900"
+          className="min-h-11 touch-manipulation rounded-lg bg-white px-4 py-2.5 text-sm font-semibold text-zinc-900"
         >
-          Upload
+          Create
         </Link>
         {error && <p className="text-xs text-amber-400">{error}</p>}
       </div>
@@ -179,36 +271,53 @@ export function Reels({ posts, loading, error, onRefresh, onEngage }: ReelsProps
 
   return (
     <div className="relative h-full w-full bg-black">
-      <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-between px-4 pt-3">
+      <div
+        className="absolute inset-x-0 top-0 z-20 flex items-center justify-between px-2"
+        style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}
+      >
+        <Link
+          to="/upload"
+          className="flex h-11 w-11 touch-manipulation items-center justify-center rounded-full text-white drop-shadow active:bg-white/10"
+          aria-label="Create post"
+        >
+          <PlusSquare className="h-6 w-6" strokeWidth={1.75} />
+        </Link>
         <h1 className="text-sm font-semibold text-white drop-shadow">Reels</h1>
         <button
           type="button"
           onClick={onRefresh}
-          className="text-xs text-white/70 underline"
+          className="min-h-11 touch-manipulation px-3 text-xs text-white/70 underline"
         >
           Refresh
         </button>
       </div>
       {error && (
-        <p className="absolute inset-x-0 top-10 z-20 px-4 text-center text-[11px] text-amber-300">
+        <p className="absolute inset-x-0 top-14 z-20 px-4 text-center text-[11px] text-amber-300">
           {error}
         </p>
       )}
 
       <div
         ref={scrollerRef}
-        className="h-full w-full snap-y snap-mandatory overflow-y-scroll overscroll-y-contain"
+        className="scroll-touch h-full w-full snap-y snap-mandatory overflow-y-scroll overscroll-y-contain"
         style={{
           scrollSnapType: 'y mandatory',
           WebkitOverflowScrolling: 'touch',
+          touchAction: 'pan-y',
         }}
       >
         {posts.map((post) => (
-          <div key={post.id} className="h-full w-full snap-start snap-always">
+          <div
+            key={feedItemKey(post)}
+            className="h-full w-full shrink-0 snap-start snap-always"
+          >
             <ReelSlide
               post={post}
               root={root}
               profile={getProfile(post.pubkey)}
+              reposterProfile={
+                post.repost ? getProfile(post.repost.pubkey) : undefined
+              }
               onEngage={onEngage}
             />
           </div>
