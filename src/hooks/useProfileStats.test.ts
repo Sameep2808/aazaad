@@ -13,24 +13,32 @@ vi.mock('../lib/nostr', async (importOriginal) => {
     ...actual,
     fetchContactListEvents: vi.fn(),
     fetchFollowerCandidateEvents: vi.fn(),
-    fetchUserPostEvents: vi.fn(),
+  }
+})
+
+vi.mock('../lib/posts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/posts')>()
+  return {
+    ...actual,
+    fetchAuthorMediaEvents: vi.fn(),
   }
 })
 
 import {
   fetchContactListEvents,
   fetchFollowerCandidateEvents,
-  fetchUserPostEvents,
 } from '../lib/nostr'
+import { fetchAuthorMediaEvents } from '../lib/posts'
 
 describe('useProfileStats', () => {
   beforeEach(async () => {
     await db.profileStats.clear()
     await db.follows.clear()
     await db.accounts.clear()
+    await db.posts.clear()
     vi.mocked(fetchContactListEvents).mockReset()
     vi.mocked(fetchFollowerCandidateEvents).mockReset()
-    vi.mocked(fetchUserPostEvents).mockReset()
+    vi.mocked(fetchAuthorMediaEvents).mockReset()
   })
 
   it('loads posts, followers, and following counts', async () => {
@@ -56,9 +64,25 @@ describe('useProfileStats', () => {
         sig: '4'.repeat(128),
       } as Event,
     ])
-    vi.mocked(fetchUserPostEvents).mockResolvedValue([
-      { id: '5'.repeat(64) } as Event,
-      { id: '6'.repeat(64) } as Event,
+    vi.mocked(fetchAuthorMediaEvents).mockResolvedValue([
+      {
+        id: '5'.repeat(64),
+        kind: 22,
+        pubkey: me,
+        created_at: 12,
+        content: 'a',
+        tags: [['x', 'bafya'], ['imeta', 'url ipfs://bafya', 'm video/mp4']],
+        sig: '7'.repeat(128),
+      } as Event,
+      {
+        id: '6'.repeat(64),
+        kind: 1,
+        pubkey: me,
+        created_at: 13,
+        content: 'ipfs://bafyb',
+        tags: [['x', 'bafyb'], ['t', 'aazaad'], ['m', 'image/jpeg']],
+        sig: '8'.repeat(128),
+      } as Event,
     ])
 
     const { result } = renderHook(() => useProfileStats(me))

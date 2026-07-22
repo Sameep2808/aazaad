@@ -1,13 +1,19 @@
 import { useAuth } from '../context/AuthContext'
 import { useHelia } from '../context/HeliaContext'
 import { useProfileStats } from '../hooks/useProfileStats'
+import { useUserPosts } from '../hooks/useUserPosts'
 import { AuthForms } from '../components/AuthForms'
 import { ProfileHeader } from '../components/ProfileHeader'
+import { ProfilePostsGrid } from '../components/ProfilePostsGrid'
 
 export function Profile() {
   const { pubkey, npub, username, ready, logout } = useAuth()
   const { ready: heliaReady, error: heliaError, retry } = useHelia()
   const stats = useProfileStats(pubkey)
+  const userPosts = useUserPosts(pubkey)
+
+  // Prefer the actual media post grid count for the Instagram-style header
+  const postsCount = Math.max(stats.postsCount, userPosts.posts.length)
 
   if (!ready) {
     return (
@@ -34,18 +40,28 @@ export function Profile() {
           <ProfileHeader
             username={username}
             npub={npub}
-            postsCount={stats.postsCount}
+            postsCount={postsCount}
             followersCount={stats.followersCount}
             followingCount={stats.followingCount}
             followers={stats.followers}
             following={stats.following}
-            loading={stats.loading}
+            loading={stats.loading || userPosts.loading}
             onLogout={logout}
-            onRefresh={() => void stats.refresh()}
+            onRefresh={() => {
+              void stats.refresh()
+              void userPosts.refresh()
+            }}
           />
           {stats.error && (
             <p className="text-sm text-amber-400">{stats.error}</p>
           )}
+
+          <ProfilePostsGrid
+            posts={userPosts.posts}
+            loading={userPosts.loading}
+            error={userPosts.error}
+            onRefresh={() => void userPosts.refresh()}
+          />
         </>
       )}
 

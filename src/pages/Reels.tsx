@@ -1,10 +1,15 @@
+import { Reels as ReelsView } from '../components/Reels'
+import { useReels } from '../hooks/useReels'
+
 export function Reels() {
+  const { posts, loading, error, refresh } = useReels()
+
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
-      <h1 className="text-2xl font-semibold tracking-tight">Reels</h1>
-      <p className="text-sm text-zinc-400">
-        Vertical swiper will appear here in Phase 5.
-      </p>
-    </div>
+    <ReelsView
+      posts={posts}
+      loading={loading}
+      error={error}
+      onRefresh={() => void refresh()}
+    />
   )
 }

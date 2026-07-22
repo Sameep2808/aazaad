@@ -29,11 +29,25 @@ export interface ProfileStatsCacheRow {
   updatedAt: number
 }
 
+/** Locally cached media posts (for instant Home/Profile visibility). */
+export interface CachedPostRow {
+  id: string
+  pubkey: string
+  createdAt: number
+  cid: string
+  mediaType: 'image' | 'video' | 'unknown'
+  mimeType: string | null
+  caption: string
+  eventJson: string
+  updatedAt: number
+}
+
 class AazaadDB extends Dexie {
   follows!: Table<FollowCacheRow, string>
   seeds!: Table<SeededCidRow, string>
   accounts!: Table<AccountRow, string>
   profileStats!: Table<ProfileStatsCacheRow, string>
+  posts!: Table<CachedPostRow, string>
 
   constructor() {
     super('aazaad')
@@ -46,6 +60,13 @@ class AazaadDB extends Dexie {
       seeds: 'cid, pinnedAt',
       accounts: 'username, pubkey, createdAt',
       profileStats: 'pubkey, updatedAt',
+    })
+    this.version(3).stores({
+      follows: 'pubkey, updatedAt',
+      seeds: 'cid, pinnedAt',
+      accounts: 'username, pubkey, createdAt',
+      profileStats: 'pubkey, updatedAt',
+      posts: 'id, pubkey, createdAt, cid, updatedAt',
     })
   }
 }

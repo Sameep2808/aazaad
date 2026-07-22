@@ -94,3 +94,27 @@ export async function seedCid(node: HeliaNode, cidString: string): Promise<void>
 export function parseCid(cidString: string): CID {
   return CID.parse(cidString)
 }
+
+/** Load a CID from the local Helia node into a blob object URL for <img>/<video>. */
+export async function loadCidAsObjectUrl(
+  node: HeliaNode,
+  cidString: string,
+  mimeType?: string | null,
+): Promise<string> {
+  const cid = CID.parse(cidString)
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for await (const chunk of node.fs.cat(cid)) {
+    chunks.push(chunk)
+    total += chunk.length
+  }
+  const bytes = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.length
+  }
+  const type = mimeType || 'application/octet-stream'
+  const blob = new Blob([bytes], { type })
+  return URL.createObjectURL(blob)
+}

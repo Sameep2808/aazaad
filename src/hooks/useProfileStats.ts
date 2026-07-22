@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
-  countUniquePosts,
   deriveFollowersFromKind3,
   fetchContactListEvents,
   fetchFollowerCandidateEvents,
-  fetchUserPostEvents,
   latestContactList,
   parseContactList,
 } from '../lib/nostr'
+import { fetchAuthorMediaEvents } from '../lib/posts'
 import { db } from '../lib/db'
 import { getAccountByPubkey } from '../lib/accounts'
+import { loadCachedPostsByAuthor } from '../lib/postCache'
 
 export interface ProfilePerson {
   pubkey: string
@@ -69,16 +69,25 @@ export function useProfileStats(
         setPostsCount(cached.postCount)
       }
 
-      const [contactEvents, followerEvents, postEvents] = await Promise.all([
+      const cachedPosts = await loadCachedPostsByAuthor(pubkey)
+      if (cachedPosts.length > 0) {
+        setPostsCount(cachedPosts.length)
+      }
+
+      const [contactEvents, followerEvents, mediaEvents] = await Promise.all([
         fetchContactListEvents(pubkey),
         fetchFollowerCandidateEvents(pubkey),
-        fetchUserPostEvents(pubkey),
+        fetchAuthorMediaEvents(pubkey),
       ])
 
       const latest = latestContactList(contactEvents)
       const followingKeys = latest ? parseContactList(latest) : []
       const followerKeys = deriveFollowersFromKind3(pubkey, followerEvents)
-      const postCount = countUniquePosts(postEvents)
+      const mediaIds = new Set([
+        ...cachedPosts.map((p) => p.id),
+        ...mediaEvents.map((e) => e.id),
+      ])
+      const postCount = mediaIds.size
       const updatedAt = Date.now()
 
       await db.profileStats.put({
