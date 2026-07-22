@@ -124,8 +124,8 @@ export function Explore() {
             onEngage={explore.applyEngagement}
             emptyMessage={
               following.length === 0
-                ? 'Follow people first — Explore shows posts from their followers.'
-                : 'No posts from followers of people you follow yet. Try refresh or follow more accounts.'
+                ? 'Follow people first — Explore prioritizes mutuals, then discovery posts.'
+                : 'No explore posts yet. Mutual follows appear first, then other discovery.'
             }
           />
         )}

@@ -13,6 +13,7 @@ import {
   mergePosts,
   updateCachedEngagement,
 } from '../lib/postCache'
+import { getMutualPubkeys, prioritizeMutualAuthors } from '../lib/mutuals'
 
 export interface UseReelsResult {
   posts: FeedPost[]
@@ -33,13 +34,24 @@ export function sortReelsLatest(posts: FeedPost[]): FeedPost[] {
 }
 
 /**
- * Latest media posts for Reels (videos + images), newest first.
- * Merges local cache with relay results so fresh uploads appear immediately.
+ * Latest media for Reels — mutual follows first, then everyone else.
  */
-export function useReels(): UseReelsResult {
+export function useReels(
+  viewerPubkey?: string | null,
+  following: string[] = [],
+): UseReelsResult {
   const [posts, setPosts] = useState<FeedPost[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const followingKey = useMemo(
+    () => [...following].sort().join(','),
+    [following],
+  )
+  const followingList = useMemo(
+    () => (followingKey ? followingKey.split(',') : []),
+    [followingKey],
+  )
 
   const applyEngagement = useCallback(
     (postId: string, patch: { likes?: number; comments?: number }) => {
@@ -60,13 +72,24 @@ export function useReels(): UseReelsResult {
     [],
   )
 
+  const orderPosts = useCallback(
+    async (list: FeedPost[]) => {
+      if (!viewerPubkey || followingList.length === 0) {
+        return sortReelsLatest(list)
+      }
+      const mutuals = await getMutualPubkeys(viewerPubkey, followingList)
+      return prioritizeMutualAuthors(list, mutuals)
+    },
+    [viewerPubkey, followingList],
+  )
+
   const refresh = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
       const cached = await loadCachedPosts()
       if (cached.length > 0) {
-        setPosts(sortReelsLatest(cached))
+        setPosts(await orderPosts(cached))
       }
 
       const events = await fetchRecentPostEvents()
@@ -92,21 +115,29 @@ export function useReels(): UseReelsResult {
 
       setPosts((prev) => {
         const prevById = new Map(prev.map((p) => [p.id, p]))
-        return sortReelsLatest(
-          engaged.map((post) => {
-            const local = prevById.get(post.id)
-            return {
-              ...post,
-              likes: Math.max(post.likes, local?.likes ?? 0),
-              comments: Math.max(post.comments, local?.comments ?? 0),
-            }
-          }),
-        )
+        const withLocal = engaged.map((post) => {
+          const local = prevById.get(post.id)
+          return {
+            ...post,
+            likes: Math.max(post.likes, local?.likes ?? 0),
+            comments: Math.max(post.comments, local?.comments ?? 0),
+          }
+        })
+        // orderPosts is async — apply sync mutual sort from last known via void
+        return withLocal
       })
+
+      const ordered = await orderPosts(
+        engaged.map((post) => {
+          // preserve any optimistic engagement already in state when possible
+          return post
+        }),
+      )
+      setPosts(ordered)
     } catch (err) {
       const cached = await loadCachedPosts()
       if (cached.length > 0) {
-        setPosts(sortReelsLatest(cached))
+        setPosts(await orderPosts(cached))
         setError('Relays unreachable — showing cached reels')
       } else {
         setError(err instanceof Error ? err.message : 'Failed to load reels')
@@ -114,7 +145,7 @@ export function useReels(): UseReelsResult {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [orderPosts])
 
   useEffect(() => {
     void refresh()

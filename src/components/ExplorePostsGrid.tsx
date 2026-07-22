@@ -120,7 +120,7 @@ export function ExplorePostsGrid({
         <div>
           <h2 className="text-sm font-semibold text-zinc-100">Discover</h2>
           <p className="text-[11px] text-zinc-500">
-            Posts from people who follow accounts you follow
+            Mutual follows first, then more people to discover
           </p>
         </div>
         <button

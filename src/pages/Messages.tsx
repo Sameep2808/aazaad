@@ -1,9 +1,10 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { MessageCircle, Plus, ShieldBan } from 'lucide-react'
+import { MessageCircle, Search, ShieldBan, X } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useDmInbox } from '../hooks/useDmInbox'
 import { useProfiles } from '../hooks/useProfiles'
+import { useUserSearch } from '../hooks/useUserSearch'
 import { UserAvatar } from '../components/UserAvatar'
 import { displayHandle } from '../lib/profiles'
 import { decodePubkey, hexToNpub } from '../lib/nostr'
@@ -22,11 +23,15 @@ function formatTime(ts: number): string {
 export function Messages() {
   const { pubkey, ready } = useAuth()
   const [folder, setFolder] = useState<DmFolder>('primary')
-  const [composeOpen, setComposeOpen] = useState(false)
-  const [composeValue, setComposeValue] = useState('')
-  const [composeError, setComposeError] = useState<string | null>(null)
   const navigate = useNavigate()
   const inbox = useDmInbox(folder)
+  const {
+    query,
+    setQuery,
+    results: peopleResults,
+    loading: searchLoading,
+    searched,
+  } = useUserSearch()
 
   const peerIds = useMemo(
     () => inbox.threads.map((t) => t.peerPubkey),
@@ -34,20 +39,56 @@ export function Messages() {
   )
   const { get: getProfile } = useProfiles(peerIds)
 
-  function startChat() {
-    setComposeError(null)
-    const peer = decodePubkey(composeValue)
-    if (!peer) {
-      setComposeError('Enter a valid npub or hex pubkey')
+  const filteredThreads = useMemo(() => {
+    const q = query.trim().toLowerCase().replace(/^@+/, '')
+    if (!q) return inbox.threads
+
+    const asPubkey = decodePubkey(query.trim())
+    return inbox.threads.filter((thread) => {
+      if (asPubkey && thread.peerPubkey === asPubkey) return true
+      const profile = getProfile(thread.peerPubkey)
+      const handle = (profile?.username ?? '').toLowerCase()
+      const display = (profile?.displayName ?? '').toLowerCase()
+      const npub = hexToNpub(thread.peerPubkey).toLowerCase()
+      return (
+        handle.includes(q) ||
+        display.includes(q) ||
+        npub.includes(q) ||
+        thread.peerPubkey.includes(q) ||
+        thread.lastPreview.toLowerCase().includes(q)
+      )
+    })
+  }, [inbox.threads, query, getProfile])
+
+  const searching = query.trim().length > 0
+
+  // People search results not already shown as a matching thread
+  const threadPeerSet = useMemo(
+    () => new Set(filteredThreads.map((t) => t.peerPubkey)),
+    [filteredThreads],
+  )
+  const newPeople = useMemo(
+    () =>
+      peopleResults.filter(
+        (p) => p.pubkey !== pubkey && !threadPeerSet.has(p.pubkey),
+      ),
+    [peopleResults, pubkey, threadPeerSet],
+  )
+
+  function openChat(peerHex: string) {
+    navigate(`/messages/${hexToNpub(peerHex)}`)
+    setQuery('')
+  }
+
+  function onSearchSubmit(e: FormEvent) {
+    e.preventDefault()
+    const peer = decodePubkey(query)
+    if (peer && peer !== pubkey) {
+      openChat(peer)
       return
     }
-    if (pubkey && peer === pubkey) {
-      setComposeError("You can't message yourself")
-      return
-    }
-    setComposeOpen(false)
-    setComposeValue('')
-    navigate(`/messages/${hexToNpub(peer)}`)
+    if (newPeople[0]) openChat(newPeople[0].pubkey)
+    else if (filteredThreads[0]) openChat(filteredThreads[0].peerPubkey)
   }
 
   if (!ready) {
@@ -79,17 +120,37 @@ export function Messages() {
         className="sticky top-0 z-30 border-b border-zinc-800 bg-zinc-950/95 backdrop-blur-md"
         style={{ paddingTop: 'env(safe-area-inset-top)' }}
       >
-        <div className="flex h-12 items-center justify-between px-2">
-          <h1 className="px-2 text-lg font-bold tracking-wide">Messages</h1>
-          <button
-            type="button"
-            onClick={() => setComposeOpen((v) => !v)}
-            className="flex h-11 w-11 touch-manipulation items-center justify-center rounded-full text-zinc-100 active:bg-zinc-800"
-            aria-label="New message"
-          >
-            <Plus className="h-6 w-6" strokeWidth={1.75} />
-          </button>
+        <div className="px-3 pt-2">
+          <h1 className="text-lg font-bold tracking-wide">Messages</h1>
         </div>
+
+        <form onSubmit={onSearchSubmit} className="px-3 py-2">
+          <label className="relative block">
+            <span className="sr-only">Search messages</span>
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search by @userid or npub"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              enterKeyHint="search"
+              className="min-h-11 w-full rounded-xl border border-zinc-800 bg-zinc-900 py-2.5 pl-10 pr-10 text-base text-zinc-100 placeholder:text-zinc-500 outline-none focus:border-zinc-600"
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery('')}
+                className="absolute right-1 top-1/2 flex h-10 w-10 -translate-y-1/2 touch-manipulation items-center justify-center rounded-full text-zinc-500 active:text-zinc-300"
+                aria-label="Clear search"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </label>
+        </form>
 
         <div className="flex px-2">
           <button
@@ -124,35 +185,6 @@ export function Messages() {
         </div>
       </header>
 
-      {composeOpen && (
-        <div className="space-y-2 border-b border-zinc-800 px-3 py-3">
-          <p className="text-xs text-zinc-500">
-            Message someone by npub or hex pubkey
-          </p>
-          <div className="flex gap-2">
-            <input
-              value={composeValue}
-              onChange={(e) => setComposeValue(e.target.value)}
-              placeholder="npub1… or hex"
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-              className="min-h-11 flex-1 rounded-xl border border-zinc-700 bg-zinc-900 px-3 text-sm outline-none"
-            />
-            <button
-              type="button"
-              onClick={startChat}
-              className="min-h-11 touch-manipulation rounded-xl bg-white px-4 text-sm font-semibold text-zinc-900"
-            >
-              Chat
-            </button>
-          </div>
-          {composeError && (
-            <p className="text-xs text-amber-400">{composeError}</p>
-          )}
-        </div>
-      )}
-
       <div className="flex items-center justify-end px-3 py-2">
         <button
           type="button"
@@ -167,18 +199,61 @@ export function Messages() {
         <p className="px-3 text-sm text-amber-400">{inbox.error}</p>
       )}
 
-      {inbox.threads.length === 0 && !inbox.loading ? (
+      {searching && searchLoading && (
+        <p className="px-3 text-sm text-zinc-500">Searching…</p>
+      )}
+
+      {searching && newPeople.length > 0 && (
+        <div className="border-b border-zinc-900 pb-2">
+          <p className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+            People
+          </p>
+          <ul>
+            {newPeople.map((user) => (
+              <li key={user.pubkey}>
+                <button
+                  type="button"
+                  onClick={() => openChat(user.pubkey)}
+                  className="flex w-full touch-manipulation items-center gap-3 px-3 py-2.5 text-left active:bg-zinc-900/80"
+                >
+                  <UserAvatar profile={user} size="md" />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-zinc-100">
+                      {displayHandle(user)}
+                    </p>
+                    <p className="truncate font-mono text-[10px] text-zinc-500">
+                      {hexToNpub(user.pubkey)}
+                    </p>
+                  </div>
+                  <span className="text-xs text-sky-400">Chat</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {filteredThreads.length === 0 && !inbox.loading ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-12 text-center">
           <MessageCircle className="h-8 w-8 text-zinc-600" />
           <p className="text-sm text-zinc-400">
-            {folder === 'primary'
-              ? 'No primary chats yet. Message people you follow, or accept a request.'
-              : 'No message requests. DMs from people you don’t follow show up here.'}
+            {searching
+              ? searched && newPeople.length === 0
+                ? `No chats or people for “${query.trim()}”`
+                : 'No matching chats'
+              : folder === 'primary'
+                ? 'No primary chats yet. Search for someone by @userid or npub.'
+                : 'No message requests. DMs from people you don’t follow show up here.'}
           </p>
         </div>
       ) : (
         <ul className="divide-y divide-zinc-900">
-          {inbox.threads.map((thread) => {
+          {searching && filteredThreads.length > 0 && (
+            <li className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+              Chats
+            </li>
+          )}
+          {filteredThreads.map((thread) => {
             const profile = getProfile(thread.peerPubkey)
             return (
               <li key={thread.key} className="flex items-stretch">
