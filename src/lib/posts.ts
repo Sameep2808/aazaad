@@ -11,10 +11,24 @@ import {
   isVideoFile,
   IPFS_GATEWAYS,
 } from './media'
+import {
+  AUTHOR_CHUNK_SIZE,
+  ENGAGEMENT_EVENT_LIMIT,
+  ENGAGEMENT_ID_CHUNK,
+  FEED_PAGE_SIZE,
+  nextUntilCursor,
+  querySyncThrottled,
+} from './relayThrottle'
 
 /** Kind 22 = short-form / vertical video (NIP-71). Kind 1 = text/image notes. */
 export const FEED_KINDS = [1, 21, 22] as const
 
+export interface FeedPageResult {
+  events: Event[]
+  /** Pass as `until` for the next older page; null when exhausted */
+  nextUntil: number | null
+  exhausted: boolean
+}
 export interface FeedPost {
   id: string
   pubkey: string
@@ -239,31 +253,54 @@ export function rankPosts(posts: FeedPost[], nowSec?: number): FeedPost[] {
     })
 }
 
+export async function fetchRecentPostEventsPage(opts?: {
+  until?: number
+  limit?: number
+  relays?: readonly string[]
+  maxWait?: number
+}): Promise<FeedPageResult> {
+  const limit = opts?.limit ?? FEED_PAGE_SIZE
+  const relays = opts?.relays ?? DEFAULT_RELAYS
+  const maxWait = opts?.maxWait ?? 3200
+  const until = opts?.until
+  const relayList = [...relays]
+
+  const base: Filter = { limit, ...(until != null ? { until } : {}) }
+
+  // Sequential queries share the rate budget — avoids 160-event bursts
+  const videos = await querySyncThrottled(
+    relayList,
+    { ...base, kinds: [21, 22] },
+    { maxWait },
+  )
+  const tagged = await querySyncThrottled(
+    relayList,
+    { ...base, kinds: [1], '#t': ['aazaad'] },
+    { maxWait },
+  )
+
+  const byId = new Map<string, Event>()
+  for (const event of [...videos, ...tagged]) {
+    byId.set(event.id, event)
+  }
+  const events = [...byId.values()].filter((e) => parseFeedPost(e) !== null)
+  const nextUntil = nextUntilCursor(events)
+  // Exhausted when we got fewer media items than a half page
+  const exhausted = events.length < Math.max(3, Math.floor(limit / 2))
+  return { events, nextUntil: exhausted ? null : nextUntil, exhausted }
+}
+
+/** @deprecated Prefer fetchRecentPostEventsPage — kept for callers needing one shot. */
 export async function fetchRecentPostEvents(
   relays: readonly string[] = DEFAULT_RELAYS,
   maxWait = 5000,
 ): Promise<Event[]> {
-  const pool = getPool()
-  const relayList = [...relays]
-
-  // Parallel queries so Kind-1 text notes don't crowd out media
-  const [videos, tagged, shortForm] = await Promise.all([
-    pool.querySync(relayList, { kinds: [21, 22], limit: 60 }, { maxWait }),
-    pool.querySync(
-      relayList,
-      { kinds: [1], '#t': ['aazaad'], limit: 60 },
-      { maxWait },
-    ),
-    // Broader short-form scrape as backup
-    pool.querySync(relayList, { kinds: [22], limit: 40 }, { maxWait }),
-  ])
-
-  const byId = new Map<string, Event>()
-  for (const event of [...videos, ...tagged, ...shortForm]) {
-    byId.set(event.id, event)
-  }
-
-  return [...byId.values()].filter((e) => parseFeedPost(e) !== null)
+  const page = await fetchRecentPostEventsPage({
+    relays,
+    maxWait,
+    limit: FEED_PAGE_SIZE,
+  })
+  return page.events
 }
 
 /** Fetch media posts authored by a specific pubkey. */
@@ -272,84 +309,187 @@ export async function fetchAuthorMediaEvents(
   relays: readonly string[] = DEFAULT_RELAYS,
   maxWait = 5000,
 ): Promise<Event[]> {
-  return fetchAuthorsMediaEvents([pubkey], relays, maxWait)
+  const page = await fetchAuthorsMediaEventsPage({
+    authors: [pubkey],
+    relays,
+    maxWait,
+    limit: FEED_PAGE_SIZE,
+  })
+  return page.events
+}
+
+/**
+ * One page of media for a set of authors (rate-limited + chunked).
+ */
+export async function fetchAuthorsMediaEventsPage(opts: {
+  authors: string[]
+  until?: number
+  limit?: number
+  /** Which author chunk to fetch (0-based). */
+  authorChunkIndex?: number
+  relays?: readonly string[]
+  maxWait?: number
+}): Promise<FeedPageResult & { nextAuthorChunk: number | null; authorChunks: number }> {
+  const unique = [...new Set(opts.authors.filter(Boolean))]
+  const limit = opts.limit ?? FEED_PAGE_SIZE
+  const relays = opts.relays ?? DEFAULT_RELAYS
+  const maxWait = opts.maxWait ?? 3200
+  const until = opts.until
+  const chunkIndex = opts.authorChunkIndex ?? 0
+  const relayList = [...relays]
+
+  const chunks: string[][] = []
+  for (let i = 0; i < unique.length; i += AUTHOR_CHUNK_SIZE) {
+    chunks.push(unique.slice(i, i + AUTHOR_CHUNK_SIZE))
+  }
+  if (chunks.length === 0) {
+    return {
+      events: [],
+      nextUntil: null,
+      exhausted: true,
+      nextAuthorChunk: null,
+      authorChunks: 0,
+    }
+  }
+
+  const chunk = chunks[Math.min(chunkIndex, chunks.length - 1)]!
+  const base: Filter = {
+    authors: chunk,
+    limit,
+    ...(until != null ? { until } : {}),
+  }
+
+  const videos = await querySyncThrottled(
+    relayList,
+    { ...base, kinds: [21, 22] },
+    { maxWait },
+  )
+  const tagged = await querySyncThrottled(
+    relayList,
+    { ...base, kinds: [1], '#t': ['aazaad'] },
+    { maxWait },
+  )
+
+  const byId = new Map<string, Event>()
+  for (const event of [...videos, ...tagged]) byId.set(event.id, event)
+  const events = [...byId.values()].filter((e) => parseFeedPost(e) !== null)
+
+  const hasMoreAuthorChunks = chunkIndex + 1 < chunks.length
+  const nextUntil = nextUntilCursor(events)
+  const thinPage = events.length < Math.max(2, Math.floor(limit / 3))
+
+  // Prefer walking author chunks on first until-window; then go older
+  let nextAuthorChunk: number | null = null
+  let exhausted = false
+  if (hasMoreAuthorChunks) {
+    nextAuthorChunk = chunkIndex + 1
+  } else if (!thinPage && nextUntil != null) {
+    nextAuthorChunk = 0
+  } else {
+    exhausted = true
+  }
+
+  return {
+    events,
+    nextUntil: hasMoreAuthorChunks ? until ?? null : nextUntil,
+    exhausted,
+    nextAuthorChunk: exhausted ? null : nextAuthorChunk,
+    authorChunks: chunks.length,
+  }
 }
 
 /**
  * Fetch media posts for many authors (following feed).
- * Authors are chunked so relays don't reject oversized filters.
+ * Uses paginated first-page helper for a bounded, rate-safe initial load.
  */
 export async function fetchAuthorsMediaEvents(
   authors: string[],
   relays: readonly string[] = DEFAULT_RELAYS,
   maxWait = 5000,
 ): Promise<Event[]> {
-  const unique = [...new Set(authors.filter(Boolean))]
-  if (unique.length === 0) return []
-
-  const pool = getPool()
-  const relayList = [...relays]
-  const chunkSize = 25
-  const chunks: string[][] = []
-  for (let i = 0; i < unique.length; i += chunkSize) {
-    chunks.push(unique.slice(i, i + chunkSize))
-  }
-
-  const batches = await Promise.all(
-    chunks.map(async (chunk) => {
-      const [videos, tagged] = await Promise.all([
-        pool.querySync(
-          relayList,
-          { kinds: [21, 22], authors: chunk, limit: 80 },
-          { maxWait },
-        ),
-        pool.querySync(
-          relayList,
-          { kinds: [1], authors: chunk, '#t': ['aazaad'], limit: 80 },
-          { maxWait },
-        ),
-      ])
-      return [...videos, ...tagged]
-    }),
-  )
-
-  const byId = new Map<string, Event>()
-  for (const event of batches.flat()) {
-    byId.set(event.id, event)
-  }
-  return [...byId.values()].filter((e) => parseFeedPost(e) !== null)
+  const page = await fetchAuthorsMediaEventsPage({
+    authors,
+    relays,
+    maxWait,
+    limit: FEED_PAGE_SIZE,
+    authorChunkIndex: 0,
+  })
+  return page.events
 }
 
-/** Fetch Kind 6 reposts authored by these pubkeys. */
+/** Fetch Kind 6 reposts authored by these pubkeys (one throttled page). */
+export async function fetchRepostEventsByAuthorsPage(opts: {
+  authors: string[]
+  until?: number
+  limit?: number
+  authorChunkIndex?: number
+  relays?: readonly string[]
+  maxWait?: number
+}): Promise<FeedPageResult & { nextAuthorChunk: number | null }> {
+  const unique = [...new Set(opts.authors.filter(Boolean))]
+  const limit = opts.limit ?? FEED_PAGE_SIZE
+  const relays = opts.relays ?? DEFAULT_RELAYS
+  const maxWait = opts.maxWait ?? 3200
+  const until = opts.until
+  const chunkIndex = opts.authorChunkIndex ?? 0
+
+  const chunks: string[][] = []
+  for (let i = 0; i < unique.length; i += AUTHOR_CHUNK_SIZE) {
+    chunks.push(unique.slice(i, i + AUTHOR_CHUNK_SIZE))
+  }
+  if (chunks.length === 0) {
+    return { events: [], nextUntil: null, exhausted: true, nextAuthorChunk: null }
+  }
+
+  const chunk = chunks[Math.min(chunkIndex, chunks.length - 1)]!
+  const events = (
+    await querySyncThrottled(
+      relays,
+      {
+        kinds: [6],
+        authors: chunk,
+        limit,
+        ...(until != null ? { until } : {}),
+      },
+      { maxWait },
+    )
+  ).filter((e) => e.kind === 6)
+
+  const hasMoreAuthorChunks = chunkIndex + 1 < chunks.length
+  const nextUntil = nextUntilCursor(events)
+  const thin = events.length < Math.max(2, Math.floor(limit / 3))
+
+  if (hasMoreAuthorChunks) {
+    return {
+      events,
+      nextUntil: until ?? null,
+      exhausted: false,
+      nextAuthorChunk: chunkIndex + 1,
+    }
+  }
+  if (!thin && nextUntil != null) {
+    return {
+      events,
+      nextUntil,
+      exhausted: false,
+      nextAuthorChunk: 0,
+    }
+  }
+  return { events, nextUntil: null, exhausted: true, nextAuthorChunk: null }
+}
+
 export async function fetchRepostEventsByAuthors(
   authors: string[],
   relays: readonly string[] = DEFAULT_RELAYS,
   maxWait = 5000,
 ): Promise<Event[]> {
-  const unique = [...new Set(authors.filter(Boolean))]
-  if (unique.length === 0) return []
-
-  const pool = getPool()
-  const relayList = [...relays]
-  const chunkSize = 25
-  const batches: Event[][] = []
-
-  for (let i = 0; i < unique.length; i += chunkSize) {
-    const chunk = unique.slice(i, i + chunkSize)
-    batches.push(
-      await pool.querySync(
-        relayList,
-        { kinds: [6], authors: chunk, limit: 80 },
-        { maxWait },
-      ),
-    )
-  }
-
-  const byId = new Map<string, Event>()
-  for (const event of batches.flat()) {
-    if (event.kind === 6) byId.set(event.id, event)
-  }
-  return [...byId.values()]
+  const page = await fetchRepostEventsByAuthorsPage({
+    authors,
+    relays,
+    maxWait,
+    limit: FEED_PAGE_SIZE,
+  })
+  return page.events
 }
 
 export function parseRepostPointers(event: Event): {
@@ -458,29 +598,47 @@ export async function hydrateRepostsToFeedPosts(
 export async function fetchLikesFor(
   eventIds: string[],
   relays: readonly string[] = DEFAULT_RELAYS,
-  maxWait = 4000,
+  maxWait = 3000,
 ): Promise<Event[]> {
   if (eventIds.length === 0) return []
-  const filter: Filter = {
-    kinds: [7],
-    '#e': eventIds.slice(0, 40),
-    limit: 500,
+  const results: Event[] = []
+  for (let i = 0; i < eventIds.length; i += ENGAGEMENT_ID_CHUNK) {
+    const chunk = eventIds.slice(i, i + ENGAGEMENT_ID_CHUNK)
+    const events = await querySyncThrottled(
+      relays,
+      {
+        kinds: [7],
+        '#e': chunk,
+        limit: ENGAGEMENT_EVENT_LIMIT,
+      },
+      { maxWait },
+    )
+    results.push(...events)
   }
-  return getPool().querySync([...relays], filter, { maxWait })
+  return results
 }
 
 export async function fetchCommentsFor(
   eventIds: string[],
   relays: readonly string[] = DEFAULT_RELAYS,
-  maxWait = 4000,
+  maxWait = 3000,
 ): Promise<Event[]> {
   if (eventIds.length === 0) return []
-  const filter: Filter = {
-    kinds: [1],
-    '#e': eventIds.slice(0, 40),
-    limit: 500,
+  const results: Event[] = []
+  for (let i = 0; i < eventIds.length; i += ENGAGEMENT_ID_CHUNK) {
+    const chunk = eventIds.slice(i, i + ENGAGEMENT_ID_CHUNK)
+    const events = await querySyncThrottled(
+      relays,
+      {
+        kinds: [1],
+        '#e': chunk,
+        limit: ENGAGEMENT_EVENT_LIMIT,
+      },
+      { maxWait },
+    )
+    results.push(...events)
   }
-  return getPool().querySync([...relays], filter, { maxWait })
+  return results
 }
 
 export function countByTarget(

@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   countByTarget,
-  fetchAuthorsMediaEvents,
+  fetchAuthorsMediaEventsPage,
   fetchCommentsFor,
   fetchLikesFor,
   parseFeedPost,
@@ -11,6 +11,7 @@ import {
 import { cachePostsFromEvents, mergePosts } from '../lib/postCache'
 import { discoverFollowersOfFollowing } from '../lib/exploreDiscovery'
 import { getMutualPubkeys, prioritizeMutualAuthors } from '../lib/mutuals'
+import { FEED_PAGE_SIZE } from '../lib/relayThrottle'
 
 async function withEngagement(posts: FeedPost[]): Promise<FeedPost[]> {
   const ids = [...new Set(posts.map((p) => p.id))]
@@ -29,7 +30,7 @@ async function withEngagement(posts: FeedPost[]): Promise<FeedPost[]> {
 }
 
 /**
- * Explore feed: mutual follows first, then discovery (followers of people you follow).
+ * Explore feed with rate-limited pagination: mutuals first, then discovery.
  */
 export function useExploreFeed(
   viewerPubkey: string | null | undefined,
@@ -38,7 +39,17 @@ export function useExploreFeed(
   const [posts, setPosts] = useState<FeedPost[]>([])
   const [authors, setAuthors] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  const cursorRef = useRef<{ until: number | null; authorChunk: number }>({
+    until: null,
+    authorChunk: 0,
+  })
+  const mutualsRef = useRef<string[]>([])
+  const authorsRef = useRef<string[]>([])
+  const loadingMoreRef = useRef(false)
 
   const followingKey = useMemo(
     () => [...following].sort().join(','),
@@ -69,25 +80,56 @@ export function useExploreFeed(
     [],
   )
 
+  const ingestPage = useCallback(async (reset: boolean) => {
+    const page = await fetchAuthorsMediaEventsPage({
+      authors: authorsRef.current,
+      until: reset ? undefined : cursorRef.current.until ?? undefined,
+      limit: FEED_PAGE_SIZE,
+      authorChunkIndex: reset ? 0 : cursorRef.current.authorChunk,
+    })
+    await cachePostsFromEvents(page.events)
+    const parsed = page.events
+      .map(parseFeedPost)
+      .filter((p): p is FeedPost => p !== null)
+    const withCounts = await withEngagement(parsed)
+
+    cursorRef.current = {
+      until: page.nextUntil,
+      authorChunk: page.nextAuthorChunk ?? 0,
+    }
+    setHasMore(!page.exhausted)
+
+    setPosts((prev) => {
+      const merged = mergePosts(prev, withCounts)
+      const ranked = rankPosts(merged)
+      return prioritizeMutualAuthors(
+        ranked,
+        mutualsRef.current,
+        (a, b) => b.score - a.score || b.createdAt - a.createdAt,
+      )
+    })
+  }, [])
+
   const refresh = useCallback(async () => {
     if (!viewerPubkey) {
       setPosts([])
       setAuthors([])
+      setHasMore(false)
       return
     }
 
     setLoading(true)
     setError(null)
+    cursorRef.current = { until: null, authorChunk: 0 }
     try {
       const mutuals = await getMutualPubkeys(viewerPubkey, followingList)
+      mutualsRef.current = mutuals
       const mutualSet = new Set(mutuals)
 
       const discovered = await discoverFollowersOfFollowing(
         viewerPubkey,
         followingList,
       )
-      // Remaining = discovery authors not already mutual; also include
-      // non-mutual people you follow so Explore isn't empty of close ties.
       const nonMutualFollowing = followingList.filter(
         (pk) => !mutualSet.has(pk),
       )
@@ -96,21 +138,17 @@ export function useExploreFeed(
         ...discovered.filter((pk) => !mutualSet.has(pk)),
       ]
       const authorList = [...new Set([...mutuals, ...remaining])]
+      authorsRef.current = authorList
       setAuthors(authorList)
 
       if (authorList.length === 0) {
         setPosts([])
+        setHasMore(false)
         return
       }
 
-      const events = await fetchAuthorsMediaEvents(authorList)
-      await cachePostsFromEvents(events)
-      const parsed = events
-        .map(parseFeedPost)
-        .filter((p): p is FeedPost => p !== null)
-      const withCounts = await withEngagement(parsed)
-      const ranked = rankPosts(mergePosts(withCounts))
-      setPosts(prioritizeMutualAuthors(ranked, mutuals, (a, b) => b.score - a.score || b.createdAt - a.createdAt))
+      setPosts([])
+      await ingestPage(true)
     } catch (err) {
       setError(
         err instanceof Error ? err.message : 'Failed to load explore posts',
@@ -118,7 +156,22 @@ export function useExploreFeed(
     } finally {
       setLoading(false)
     }
-  }, [viewerPubkey, followingList])
+  }, [viewerPubkey, followingList, ingestPage])
+
+  const loadMore = useCallback(async () => {
+    if (!viewerPubkey || !hasMore || loadingMoreRef.current || loading) return
+    if (authorsRef.current.length === 0) return
+    loadingMoreRef.current = true
+    setLoadingMore(true)
+    try {
+      await ingestPage(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load more')
+    } finally {
+      loadingMoreRef.current = false
+      setLoadingMore(false)
+    }
+  }, [viewerPubkey, hasMore, loading, ingestPage])
 
   useEffect(() => {
     void refresh()
@@ -128,8 +181,11 @@ export function useExploreFeed(
     posts,
     authors,
     loading,
+    loadingMore,
+    hasMore,
     error,
     refresh,
+    loadMore,
     applyEngagement,
   }
 }

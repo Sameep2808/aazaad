@@ -119,8 +119,11 @@ export function Explore() {
           <ExplorePostsGrid
             posts={explore.posts}
             loading={explore.loading || followsLoading}
+            loadingMore={explore.loadingMore}
+            hasMore={explore.hasMore}
             error={explore.error}
             onRefresh={() => void explore.refresh()}
+            onLoadMore={() => void explore.loadMore()}
             onEngage={explore.applyEngagement}
             emptyMessage={
               following.length === 0

@@ -6,17 +6,26 @@ import { useReels } from '../hooks/useReels'
 export function Reels() {
   const { pubkey } = useAuth()
   const { following, loading: followsLoading } = useSocialGraph(pubkey)
-  const { posts, loading, error, refresh, applyEngagement } = useReels(
-    pubkey,
-    following,
-  )
+  const {
+    posts,
+    loading,
+    loadingMore,
+    hasMore,
+    error,
+    refresh,
+    loadMore,
+    applyEngagement,
+  } = useReels(pubkey, following)
 
   return (
     <ReelsView
       posts={posts}
       loading={loading || followsLoading}
+      loadingMore={loadingMore}
+      hasMore={hasMore}
       error={error}
       onRefresh={() => void refresh()}
+      onLoadMore={() => void loadMore()}
       onEngage={applyEngagement}
     />
   )

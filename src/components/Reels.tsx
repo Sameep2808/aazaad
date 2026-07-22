@@ -21,6 +21,9 @@ interface ReelsProps {
   error: string | null
   onRefresh: () => void
   onEngage?: EngageHandler
+  hasMore?: boolean
+  loadingMore?: boolean
+  onLoadMore?: () => void
 }
 
 function ReelSlide({
@@ -247,7 +250,16 @@ function ReelSlide({
   )
 }
 
-export function Reels({ posts, loading, error, onRefresh, onEngage }: ReelsProps) {
+export function Reels({
+  posts,
+  loading,
+  error,
+  onRefresh,
+  onEngage,
+  hasMore = false,
+  loadingMore = false,
+  onLoadMore,
+}: ReelsProps) {
   const scrollerRef = useRef<HTMLDivElement | null>(null)
   const [root, setRoot] = useState<Element | null>(null)
   const pubkeys = useMemo(() => {
@@ -263,6 +275,21 @@ export function Reels({ posts, loading, error, onRefresh, onEngage }: ReelsProps
   useEffect(() => {
     setRoot(scrollerRef.current)
   }, [])
+
+  // Prefetch next page when near the last couple reels
+  useEffect(() => {
+    const rootEl = scrollerRef.current
+    if (!rootEl || !onLoadMore || !hasMore) return
+
+    const onScroll = () => {
+      const slides = rootEl.children.length
+      if (slides === 0) return
+      const index = Math.round(rootEl.scrollTop / rootEl.clientHeight)
+      if (index >= slides - 2 && !loadingMore) onLoadMore()
+    }
+    rootEl.addEventListener('scroll', onScroll, { passive: true })
+    return () => rootEl.removeEventListener('scroll', onScroll)
+  }, [onLoadMore, hasMore, loadingMore, posts.length])
 
   if (loading && posts.length === 0) {
     return (
@@ -344,6 +371,11 @@ export function Reels({ posts, loading, error, onRefresh, onEngage }: ReelsProps
           </div>
         ))}
       </div>
+      {loadingMore && (
+        <p className="pointer-events-none absolute inset-x-0 bottom-16 z-20 text-center text-[11px] text-white/70">
+          Loading more…
+        </p>
+      )}
     </div>
   )
 }

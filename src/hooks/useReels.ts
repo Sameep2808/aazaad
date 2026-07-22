@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   countByTarget,
   fetchCommentsFor,
   fetchLikesFor,
-  fetchRecentPostEvents,
+  fetchRecentPostEventsPage,
   parseFeedPost,
   type FeedPost,
 } from '../lib/posts'
@@ -14,12 +14,16 @@ import {
   updateCachedEngagement,
 } from '../lib/postCache'
 import { getMutualPubkeys, prioritizeMutualAuthors } from '../lib/mutuals'
+import { FEED_PAGE_SIZE } from '../lib/relayThrottle'
 
 export interface UseReelsResult {
   posts: FeedPost[]
   loading: boolean
+  loadingMore: boolean
+  hasMore: boolean
   error: string | null
   refresh: () => Promise<void>
+  loadMore: () => Promise<void>
   applyEngagement: (
     postId: string,
     patch: { likes?: number; comments?: number },
@@ -34,7 +38,7 @@ export function sortReelsLatest(posts: FeedPost[]): FeedPost[] {
 }
 
 /**
- * Latest media for Reels — mutual follows first, then everyone else.
+ * Paginated Reels — mutual follows first, rate-limited pages.
  */
 export function useReels(
   viewerPubkey?: string | null,
@@ -42,7 +46,12 @@ export function useReels(
 ): UseReelsResult {
   const [posts, setPosts] = useState<FeedPost[]>([])
   const [loading, setLoading] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const untilRef = useRef<number | null>(null)
+  const mutualsRef = useRef<string[]>([])
+  const loadingMoreRef = useRef(false)
 
   const followingKey = useMemo(
     () => [...following].sort().join(','),
@@ -73,49 +82,46 @@ export function useReels(
   )
 
   const orderPosts = useCallback(
-    async (list: FeedPost[]) => {
-      if (!viewerPubkey || followingList.length === 0) {
+    (list: FeedPost[]) => {
+      if (!viewerPubkey || mutualsRef.current.length === 0) {
         return sortReelsLatest(list)
       }
-      const mutuals = await getMutualPubkeys(viewerPubkey, followingList)
-      return prioritizeMutualAuthors(list, mutuals)
+      return prioritizeMutualAuthors(list, mutualsRef.current)
     },
-    [viewerPubkey, followingList],
+    [viewerPubkey],
   )
 
-  const refresh = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const cached = await loadCachedPosts()
-      if (cached.length > 0) {
-        setPosts(await orderPosts(cached))
-      }
-
-      const events = await fetchRecentPostEvents()
-      await cachePostsFromEvents(events)
-      const remote = events
+  const appendPage = useCallback(
+    async (reset: boolean) => {
+      const page = await fetchRecentPostEventsPage({
+        until: reset ? undefined : untilRef.current ?? undefined,
+        limit: FEED_PAGE_SIZE,
+      })
+      await cachePostsFromEvents(page.events)
+      const remote = page.events
         .map(parseFeedPost)
         .filter((p): p is FeedPost => p !== null)
 
-      const merged = mergePosts(cached, remote)
-      const ids = merged.map((p) => p.id)
+      const ids = remote.map((p) => p.id)
       const [likes, comments] = await Promise.all([
         fetchLikesFor(ids),
         fetchCommentsFor(ids),
       ])
       const likeCounts = countByTarget(likes, 7)
       const commentCounts = countByTarget(comments, 1)
-
-      const engaged = merged.map((post) => ({
+      const engaged = remote.map((post) => ({
         ...post,
         likes: Math.max(post.likes, likeCounts.get(post.id) ?? 0),
         comments: Math.max(post.comments, commentCounts.get(post.id) ?? 0),
       }))
 
+      untilRef.current = page.nextUntil
+      setHasMore(!page.exhausted && page.nextUntil != null)
+
       setPosts((prev) => {
+        const merged = reset ? mergePosts(prev, engaged) : mergePosts(prev, engaged)
         const prevById = new Map(prev.map((p) => [p.id, p]))
-        const withLocal = engaged.map((post) => {
+        const withLocal = merged.map((post) => {
           const local = prevById.get(post.id)
           return {
             ...post,
@@ -123,21 +129,36 @@ export function useReels(
             comments: Math.max(post.comments, local?.comments ?? 0),
           }
         })
-        // orderPosts is async — apply sync mutual sort from last known via void
-        return withLocal
+        return orderPosts(withLocal)
       })
+    },
+    [orderPosts],
+  )
 
-      const ordered = await orderPosts(
-        engaged.map((post) => {
-          // preserve any optimistic engagement already in state when possible
-          return post
-        }),
-      )
-      setPosts(ordered)
+  const refresh = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    untilRef.current = null
+    try {
+      if (viewerPubkey && followingList.length > 0) {
+        mutualsRef.current = await getMutualPubkeys(
+          viewerPubkey,
+          followingList,
+        )
+      } else {
+        mutualsRef.current = []
+      }
+
+      const cached = await loadCachedPosts()
+      if (cached.length > 0) {
+        setPosts(orderPosts(cached))
+      }
+
+      await appendPage(true)
     } catch (err) {
       const cached = await loadCachedPosts()
       if (cached.length > 0) {
-        setPosts(await orderPosts(cached))
+        setPosts(orderPosts(cached))
         setError('Relays unreachable — showing cached reels')
       } else {
         setError(err instanceof Error ? err.message : 'Failed to load reels')
@@ -145,14 +166,46 @@ export function useReels(
     } finally {
       setLoading(false)
     }
-  }, [orderPosts])
+  }, [viewerPubkey, followingList, orderPosts, appendPage])
+
+  const loadMore = useCallback(async () => {
+    if (!hasMore || loadingMoreRef.current || loading) return
+    loadingMoreRef.current = true
+    setLoadingMore(true)
+    try {
+      await appendPage(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load more reels')
+    } finally {
+      loadingMoreRef.current = false
+      setLoadingMore(false)
+    }
+  }, [hasMore, loading, appendPage])
 
   useEffect(() => {
     void refresh()
   }, [refresh])
 
   return useMemo(
-    () => ({ posts, loading, error, refresh, applyEngagement }),
-    [posts, loading, error, refresh, applyEngagement],
+    () => ({
+      posts,
+      loading,
+      loadingMore,
+      hasMore,
+      error,
+      refresh,
+      loadMore,
+      applyEngagement,
+    }),
+    [
+      posts,
+      loading,
+      loadingMore,
+      hasMore,
+      error,
+      refresh,
+      loadMore,
+      applyEngagement,
+    ],
   )
 }

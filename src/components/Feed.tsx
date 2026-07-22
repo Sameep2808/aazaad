@@ -7,6 +7,7 @@ import {
 } from '../hooks/useOptimisticEngagement'
 import { useProfiles } from '../hooks/useProfiles'
 import { useRepost } from '../hooks/useRepost'
+import { useNearEndScroll } from '../hooks/useNearEndScroll'
 import { feedItemKey, type FeedPost } from '../lib/posts'
 import type { ResolvedProfile } from '../lib/profiles'
 import { displayHandle } from '../lib/profiles'
@@ -22,6 +23,9 @@ interface FeedProps {
   onEngage?: EngageHandler
   compact?: boolean
   emptyMessage?: string
+  hasMore?: boolean
+  loadingMore?: boolean
+  onLoadMore?: () => void
 }
 
 export { AutoMedia as MediaPlayer } from './AutoMedia'
@@ -254,6 +258,9 @@ export function Feed({
   onEngage,
   compact = false,
   emptyMessage = 'No posts from people you follow yet.',
+  hasMore = false,
+  loadingMore = false,
+  onLoadMore,
 }: FeedProps) {
   const pubkeys = useMemo(() => {
     const ids: string[] = []
@@ -264,6 +271,13 @@ export function Feed({
     return ids
   }, [posts])
   const { get: getProfile } = useProfiles(pubkeys)
+
+  const handleNearEnd = useCallback(() => {
+    if (hasMore && !loadingMore && onLoadMore) onLoadMore()
+  }, [hasMore, loadingMore, onLoadMore])
+  const sentinelRef = useNearEndScroll(handleNearEnd, {
+    enabled: Boolean(onLoadMore) && hasMore,
+  })
 
   if (loading && posts.length === 0) {
     return (
@@ -308,6 +322,13 @@ export function Feed({
             onEngage={onEngage}
           />
         ))
+      )}
+      <div ref={sentinelRef} className="h-8 w-full" aria-hidden />
+      {loadingMore && (
+        <p className="py-3 text-center text-xs text-zinc-500">Loading more…</p>
+      )}
+      {!hasMore && posts.length > 0 && (
+        <p className="py-3 text-center text-[10px] text-zinc-600">End of feed</p>
       )}
     </div>
   )

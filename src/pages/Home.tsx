@@ -7,10 +7,8 @@ import { useSocialGraph } from '../hooks/useSocialGraph'
 export function Home() {
   const { pubkey, ready } = useAuth()
   const { following, loading: followsLoading } = useSocialGraph(pubkey)
-  const { posts, loading, error, refresh, applyEngagement } = useFeed(
-    pubkey,
-    following,
-  )
+  const { posts, loading, loadingMore, hasMore, error, refresh, loadMore, applyEngagement } =
+    useFeed(pubkey, following)
 
   if (!ready) {
     return (
@@ -41,8 +39,11 @@ export function Home() {
     <Feed
       posts={posts}
       loading={loading || followsLoading}
+      loadingMore={loadingMore}
+      hasMore={hasMore}
       error={error}
       onRefresh={() => void refresh()}
+      onLoadMore={() => void loadMore()}
       onEngage={applyEngagement}
       emptyMessage={
         following.length === 0

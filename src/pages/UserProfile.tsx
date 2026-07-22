@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Check, Copy } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useProfileStats } from '../hooks/useProfileStats'
 import { useUserPosts } from '../hooks/useUserPosts'
@@ -67,6 +67,7 @@ export function UserProfile() {
   const [profile, setProfile] = useState<ResolvedProfile | null>(null)
   const [profileLoading, setProfileLoading] = useState(true)
   const [listTab, setListTab] = useState<'followers' | 'following' | null>(null)
+  const [copied, setCopied] = useState(false)
 
   const stats = useProfileStats(targetPubkey)
   const userPosts = useUserPosts(targetPubkey)
@@ -114,6 +115,25 @@ export function UserProfile() {
   const npub = hexToNpub(targetPubkey)
   const postsCount = Math.max(stats.postsCount, userPosts.posts.length)
   const handle = displayHandle(profile)
+
+  async function copyNpub() {
+    try {
+      await navigator.clipboard.writeText(npub)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1600)
+    } catch {
+      const ta = document.createElement('textarea')
+      ta.value = npub
+      ta.style.position = 'fixed'
+      ta.style.left = '-9999px'
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1600)
+    }
+  }
 
   return (
     <div className="flex flex-1 flex-col gap-5 px-4 py-4">
@@ -204,7 +224,34 @@ export function UserProfile() {
         </div>
       </div>
 
-      <p className="break-all font-mono text-[10px] text-zinc-500">{npub}</p>
+      <div className="space-y-1.5 rounded-xl border border-zinc-800 bg-zinc-900/40 px-3 py-2.5">
+        <p className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+          npub id
+        </p>
+        <div className="flex items-start gap-2">
+          <p className="min-w-0 flex-1 break-all font-mono text-[11px] leading-relaxed text-zinc-300">
+            {npub}
+          </p>
+          <button
+            type="button"
+            onClick={() => void copyNpub()}
+            className="flex shrink-0 touch-manipulation items-center gap-1.5 rounded-lg border border-zinc-700 px-2.5 py-1.5 text-xs font-medium text-zinc-200 active:bg-zinc-800"
+            aria-label={copied ? 'Copied' : 'Copy npub id'}
+          >
+            {copied ? (
+              <>
+                <Check className="h-3.5 w-3.5 text-emerald-400" />
+                Copied
+              </>
+            ) : (
+              <>
+                <Copy className="h-3.5 w-3.5" />
+                Copy
+              </>
+            )}
+          </button>
+        </div>
+      </div>
       {(profileLoading || stats.loading) && (
         <p className="text-xs text-zinc-500">Loading profile…</p>
       )}

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Camera } from 'lucide-react'
+import { Camera, Check, Copy } from 'lucide-react'
 import type { ProfilePerson } from '../hooks/useProfileStats'
 import type { ResolvedProfile } from '../lib/profiles'
 import { UserAvatar } from './UserAvatar'
@@ -84,6 +84,7 @@ export function ProfileHeader({
 }: ProfileHeaderProps) {
   const [listTab, setListTab] = useState<ListTab>(null)
   const [photoError, setPhotoError] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const displayName = displayHandle(
     profile ?? {
@@ -99,6 +100,26 @@ export function ProfileHeader({
     setPhotoError(null)
   }, [profile?.pictureCid])
 
+  async function copyNpub() {
+    if (!npub) return
+    try {
+      await navigator.clipboard.writeText(npub)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1600)
+    } catch {
+      // Fallback for older webviews
+      const ta = document.createElement('textarea')
+      ta.value = npub
+      ta.style.position = 'fixed'
+      ta.style.left = '-9999px'
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1600)
+    }
+  }
   return (
     <div className="space-y-5">
       <div className="flex items-start gap-4">
@@ -189,7 +210,34 @@ export function ProfileHeader({
       </div>
 
       {npub && (
-        <p className="break-all font-mono text-[10px] text-zinc-500">{npub}</p>
+        <div className="space-y-1.5 rounded-xl border border-zinc-800 bg-zinc-900/40 px-3 py-2.5">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+            npub id
+          </p>
+          <div className="flex items-start gap-2">
+            <p className="min-w-0 flex-1 break-all font-mono text-[11px] leading-relaxed text-zinc-300">
+              {npub}
+            </p>
+            <button
+              type="button"
+              onClick={() => void copyNpub()}
+              className="flex shrink-0 touch-manipulation items-center gap-1.5 rounded-lg border border-zinc-700 px-2.5 py-1.5 text-xs font-medium text-zinc-200 active:bg-zinc-800"
+              aria-label={copied ? 'Copied' : 'Copy npub id'}
+            >
+              {copied ? (
+                <>
+                  <Check className="h-3.5 w-3.5 text-emerald-400" />
+                  Copied
+                </>
+              ) : (
+                <>
+                  <Copy className="h-3.5 w-3.5" />
+                  Copy
+                </>
+              )}
+            </button>
+          </div>
+        </div>
       )}
 
       {listTab === 'followers' && (

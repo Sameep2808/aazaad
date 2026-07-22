@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Play } from 'lucide-react'
 import { useHelia } from '../context/HeliaContext'
 import { useProfiles } from '../hooks/useProfiles'
+import { useNearEndScroll } from '../hooks/useNearEndScroll'
 import { feedItemKey, type FeedPost } from '../lib/posts'
 import { IPFS_GATEWAYS, cidToGatewayUrl } from '../lib/media'
 import { loadCidAsObjectUrl } from '../lib/ipfs'
@@ -15,6 +16,9 @@ interface ExplorePostsGridProps {
   onRefresh: () => void
   onEngage?: EngageHandler
   emptyMessage?: string
+  hasMore?: boolean
+  loadingMore?: boolean
+  onLoadMore?: () => void
 }
 
 function GridThumb({
@@ -100,6 +104,9 @@ export function ExplorePostsGrid({
   onRefresh,
   onEngage,
   emptyMessage = 'No discovery posts yet. Follow more people to unlock Explore.',
+  hasMore = false,
+  loadingMore = false,
+  onLoadMore,
 }: ExplorePostsGridProps) {
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const selected = posts.find((p) => feedItemKey(p) === selectedKey) ?? null
@@ -107,6 +114,13 @@ export function ExplorePostsGrid({
     ? ([selected.pubkey, selected.repost?.pubkey].filter(Boolean) as string[])
     : []
   const { get: getProfile } = useProfiles(authorKeys)
+
+  const handleNearEnd = useCallback(() => {
+    if (hasMore && !loadingMore && onLoadMore) onLoadMore()
+  }, [hasMore, loadingMore, onLoadMore])
+  const sentinelRef = useNearEndScroll(handleNearEnd, {
+    enabled: Boolean(onLoadMore) && hasMore,
+  })
 
   useEffect(() => {
     if (selectedKey && !posts.some((p) => feedItemKey(p) === selectedKey)) {
@@ -171,6 +185,11 @@ export function ExplorePostsGrid({
             onEngage={onEngage}
           />
         </div>
+      )}
+
+      <div ref={sentinelRef} className="h-6 w-full" aria-hidden />
+      {loadingMore && (
+        <p className="py-2 text-center text-xs text-zinc-500">Loading more…</p>
       )}
     </section>
   )
