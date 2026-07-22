@@ -36,7 +36,14 @@ function ReelSlide({
   reposterProfile?: ResolvedProfile | null
   onEngage?: EngageHandler
 }) {
-  const { seed, seeding } = useIPFSSeed()
+  const {
+    toggleSeed,
+    busyCid: seedBusyCid,
+    error: seedError,
+    isSeeded,
+    hydrate: hydrateSeed,
+    noteSeeded,
+  } = useIPFSSeed()
   const {
     likes,
     comments,
@@ -53,7 +60,6 @@ function ReelSlide({
   const mediaRef = useRef<AutoMediaHandle>(null)
   const [showComment, setShowComment] = useState(false)
   const [commentText, setCommentText] = useState('')
-  const [seeded, setSeeded] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
 
   useEffect(() => {
@@ -65,8 +71,13 @@ function ReelSlide({
   }, [repostError])
 
   useEffect(() => {
+    if (seedError) setMsg(seedError)
+  }, [seedError])
+
+  useEffect(() => {
     void hydrate([post.id])
-  }, [post.id, hydrate])
+    void hydrateSeed([post.cid])
+  }, [post.id, post.cid, hydrate, hydrateSeed])
 
   const onDoubleTapLike = useCallback(() => {
     void likeOnly()
@@ -76,17 +87,18 @@ function ReelSlide({
     mediaRef.current?.togglePlayPause()
   }, [])
 
-  async function onSeed() {
+  async function onToggleSeed() {
     try {
-      await seed(post.cid)
-      setSeeded(true)
-      setMsg('Seeding')
+      const result = await toggleSeed(post.cid)
+      setMsg(result === 'seeded' ? 'Seeding' : 'Stopped seeding')
     } catch (err) {
       setMsg(err instanceof Error ? err.message : 'Seed failed')
     }
   }
 
   const alreadyReposted = isReposted(post.id)
+  const seeded = isSeeded(post.cid)
+  const seedBusy = seedBusyCid === post.cid
 
   return (
     <section className="relative h-full w-full bg-black">
@@ -164,8 +176,13 @@ function ReelSlide({
           disabled={busyId === post.id}
           onClick={() => {
             void toggleRepost(post).then((result) => {
-              if (result === 'reposted') setMsg('Reposted')
-              else if (result === 'unreposted') setMsg('Removed repost')
+              if (result === 'reposted') {
+                noteSeeded(post.cid)
+                void hydrateSeed([post.cid])
+                setMsg('Reposted · seeding')
+              } else if (result === 'unreposted') {
+                setMsg('Removed repost')
+              }
             })
           }}
           className={[
@@ -184,15 +201,19 @@ function ReelSlide({
 
         <button
           type="button"
-          disabled={seeding || seeded}
-          onClick={() => void onSeed()}
-          className="flex touch-manipulation flex-col items-center gap-1 text-emerald-300 disabled:opacity-50 active:opacity-70"
+          disabled={seedBusy}
+          onClick={() => void onToggleSeed()}
+          className={[
+            'flex touch-manipulation flex-col items-center gap-1 disabled:opacity-50 active:opacity-70',
+            seeded ? 'text-emerald-300' : 'text-white',
+          ].join(' ')}
+          aria-pressed={seeded}
         >
           <span className="rounded-full bg-black/35 p-3 backdrop-blur-sm">
             <Radio className="h-7 w-7" />
           </span>
           <span className="text-[10px] font-medium">
-            {seeded ? 'Seeded' : 'Seed'}
+            {seedBusy ? '…' : seeded ? 'Seeding' : 'Seed'}
           </span>
         </button>
       </div>

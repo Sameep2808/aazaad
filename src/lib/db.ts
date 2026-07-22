@@ -81,6 +81,43 @@ export interface MyLikeRow {
   updatedAt: number
 }
 
+/** Cached decrypted DM (NIP-04 Kind 4). */
+export interface DmMessageRow {
+  id: string
+  ownerPubkey: string
+  peerPubkey: string
+  createdAt: number
+  content: string
+  direction: 'in' | 'out'
+  eventJson: string
+}
+
+export interface DmThreadRow {
+  /** `${ownerPubkey}:${peerPubkey}` */
+  key: string
+  ownerPubkey: string
+  peerPubkey: string
+  folder: 'primary' | 'request'
+  lastAt: number
+  lastPreview: string
+  unread: number
+  updatedAt: number
+}
+
+export interface DmBlockRow {
+  key: string
+  ownerPubkey: string
+  peerPubkey: string
+  blockedAt: number
+}
+
+export interface DmAcceptedRow {
+  key: string
+  ownerPubkey: string
+  peerPubkey: string
+  acceptedAt: number
+}
+
 class AazaadDB extends Dexie {
   follows!: Table<FollowCacheRow, string>
   seeds!: Table<SeededCidRow, string>
@@ -90,6 +127,10 @@ class AazaadDB extends Dexie {
   profiles!: Table<ProfileRow, string>
   reposts!: Table<CachedRepostRow, string>
   myLikes!: Table<MyLikeRow, string>
+  dmMessages!: Table<DmMessageRow, string>
+  dmThreads!: Table<DmThreadRow, string>
+  dmBlocks!: Table<DmBlockRow, string>
+  dmAccepted!: Table<DmAcceptedRow, string>
 
   constructor() {
     super('aazaad')
@@ -172,6 +213,21 @@ class AazaadDB extends Dexie {
       profiles: 'pubkey, username, updatedAt',
       reposts: 'id, reposterPubkey, originalEventId, createdAt, updatedAt',
       myLikes: 'key, pubkey, postId, active, updatedAt',
+    })
+    this.version(9).stores({
+      follows: 'pubkey, updatedAt',
+      seeds: 'cid, pinnedAt',
+      accounts: 'username, pubkey, createdAt',
+      profileStats: 'pubkey, updatedAt',
+      posts: 'id, pubkey, createdAt, cid, updatedAt',
+      profiles: 'pubkey, username, updatedAt',
+      reposts: 'id, reposterPubkey, originalEventId, createdAt, updatedAt',
+      myLikes: 'key, pubkey, postId, active, updatedAt',
+      dmMessages: 'id, ownerPubkey, peerPubkey, [ownerPubkey+peerPubkey], createdAt',
+      dmThreads:
+        'key, ownerPubkey, peerPubkey, folder, [ownerPubkey+folder], lastAt, updatedAt',
+      dmBlocks: 'key, ownerPubkey, peerPubkey',
+      dmAccepted: 'key, ownerPubkey, peerPubkey',
     })
   }
 }

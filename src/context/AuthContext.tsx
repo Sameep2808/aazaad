@@ -16,6 +16,7 @@ import {
   secretKeyToHex,
   signWithSecretKey,
 } from '../lib/nostr'
+import * as nip04 from 'nostr-tools/nip04'
 import {
   createAccount as createLocalAccount,
   loginWithPassword as unlockLocalAccount,
@@ -44,6 +45,12 @@ export interface AuthState {
   refreshAccounts: () => Promise<void>
   logout: () => void
   signEvent: (template: EventTemplate) => Promise<Event>
+  /** NIP-04 encrypt a DM for peer pubkey */
+  encryptDm: (peerPubkey: string, plaintext: string) => Promise<string>
+  /** NIP-04 decrypt a DM from peer pubkey */
+  decryptDm: (peerPubkey: string, ciphertext: string) => Promise<string>
+  /** True when we can send/receive encrypted DMs */
+  canDm: boolean
 }
 
 declare global {
@@ -51,6 +58,10 @@ declare global {
     nostr?: {
       getPublicKey: () => Promise<string>
       signEvent: (event: EventTemplate) => Promise<Event>
+      nip04?: {
+        encrypt: (pubkey: string, plaintext: string) => Promise<string>
+        decrypt: (pubkey: string, ciphertext: string) => Promise<string>
+      }
     }
   }
 }
@@ -241,6 +252,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [method, secretKey],
   )
 
+  const encryptDm = useCallback(
+    async (peerPubkey: string, plaintext: string): Promise<string> => {
+      if (method === 'nip07') {
+        if (!window.nostr?.nip04?.encrypt) {
+          throw new Error('Extension does not support encrypted DMs (NIP-04)')
+        }
+        return window.nostr.nip04.encrypt(peerPubkey, plaintext)
+      }
+      if ((method === 'password' || method === 'ephemeral') && secretKey) {
+        return nip04.encrypt(secretKey, peerPubkey, plaintext)
+      }
+      throw new Error('Log in to send messages')
+    },
+    [method, secretKey],
+  )
+
+  const decryptDm = useCallback(
+    async (peerPubkey: string, ciphertext: string): Promise<string> => {
+      if (method === 'nip07') {
+        if (!window.nostr?.nip04?.decrypt) {
+          throw new Error('Extension does not support encrypted DMs (NIP-04)')
+        }
+        return window.nostr.nip04.decrypt(peerPubkey, ciphertext)
+      }
+      if ((method === 'password' || method === 'ephemeral') && secretKey) {
+        return nip04.decrypt(secretKey, peerPubkey, ciphertext)
+      }
+      throw new Error('Log in to read messages')
+    },
+    [method, secretKey],
+  )
+
+  const canDm =
+    Boolean(pubkey) &&
+    (Boolean(secretKey) ||
+      (method === 'nip07' && typeof window !== 'undefined'))
+
   const value = useMemo<AuthState>(
     () => ({
       pubkey,
@@ -257,6 +305,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       refreshAccounts,
       logout,
       signEvent,
+      encryptDm,
+      decryptDm,
+      canDm,
     }),
     [
       pubkey,
@@ -272,6 +323,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       refreshAccounts,
       logout,
       signEvent,
+      encryptDm,
+      decryptDm,
+      canDm,
     ],
   )
 

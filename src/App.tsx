@@ -7,14 +7,17 @@ import { Reels } from './pages/Reels'
 import { Upload } from './pages/Upload'
 import { Profile } from './pages/Profile'
 import { UserProfile } from './pages/UserProfile'
+import { Messages } from './pages/Messages'
+import { ChatThread } from './pages/ChatThread'
 
 function App() {
   const location = useLocation()
   const isReels = location.pathname === '/reels'
   const isExplore = location.pathname === '/explore'
   const isUserProfile = location.pathname.startsWith('/u/')
-  /** Custom chrome: Reels/Explore/User profile handle their own top UI */
-  const showAppHeader = !isReels && !isExplore && !isUserProfile
+  const isMessages = location.pathname.startsWith('/messages')
+  const showAppHeader =
+    !isReels && !isExplore && !isUserProfile && !isMessages
 
   return (
     <div
@@ -28,12 +31,12 @@ function App() {
       <main
         className={[
           'flex min-h-0 flex-1 flex-col',
-          isReels
+          isReels || isMessages
             ? 'overflow-hidden pb-14'
             : 'scroll-touch overflow-y-auto overscroll-y-contain pb-16',
         ].join(' ')}
         style={
-          isReels
+          isReels || isMessages
             ? { paddingBottom: 'calc(3.5rem + env(safe-area-inset-bottom))' }
             : {
                 paddingBottom:
@@ -44,6 +47,8 @@ function App() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/explore" element={<Explore />} />
+          <Route path="/messages" element={<Messages />} />
+          <Route path="/messages/:id" element={<ChatThread />} />
           <Route path="/u/:id" element={<UserProfile />} />
           <Route path="/reels" element={<Reels />} />
           <Route path="/upload" element={<Upload />} />

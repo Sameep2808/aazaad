@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
+import { useHelia } from '../context/HeliaContext'
 import {
   buildDeletionEvent,
   buildRepostEvent,
@@ -12,12 +13,15 @@ import {
   getMyActiveRepost,
   isPostRepostedByMe,
 } from '../lib/reactions'
+import { seedCid } from '../lib/ipfs'
 
 /**
  * Toggle repost — one active Kind 6 per user per post; second press unreposts (NIP-09).
+ * Successful reposts also auto-seed the post CID on this device.
  */
 export function useRepost() {
   const { pubkey, signEvent } = useAuth()
+  const { helia, ready: heliaReady } = useHelia()
   const [busyId, setBusyId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [activeIds, setActiveIds] = useState<Set<string>>(() => new Set())
@@ -54,6 +58,19 @@ export function useRepost() {
     if (!pubkey) setActiveIds(new Set())
   }, [pubkey])
 
+  const autoSeed = useCallback(
+    async (cid: string) => {
+      if (!helia || !heliaReady || !cid) return
+      try {
+        await seedCid(helia, cid)
+        await db.seeds.put({ cid, pinnedAt: Date.now() })
+      } catch {
+        // Repost should still succeed if seeding fails (offline Helia, etc.)
+      }
+    },
+    [helia, heliaReady],
+  )
+
   const toggleRepost = useCallback(
     async (post: FeedPost): Promise<'reposted' | 'unreposted' | false> => {
       if (!pubkey) {
@@ -87,10 +104,10 @@ export function useRepost() {
           return 'unreposted'
         }
 
-        // Prevent double-repost if somehow still active
         const already = await getMyActiveRepost(pubkey, targetId)
         if (already) {
           mark(targetId, true)
+          await autoSeed(post.cid)
           return 'reposted'
         }
 
@@ -98,6 +115,8 @@ export function useRepost() {
         const signed = await signEvent(buildRepostEvent(target))
         await cacheRepostEvent(signed, target)
         void publishEvent(signed)
+        // Auto-seed so the reposted media stays available on the network
+        await autoSeed(post.cid)
         return 'reposted'
       } catch (err) {
         mark(targetId, currently)
@@ -107,7 +126,7 @@ export function useRepost() {
         setBusyId(null)
       }
     },
-    [pubkey, signEvent, busyId, activeIds, mark],
+    [pubkey, signEvent, busyId, activeIds, mark, autoSeed],
   )
 
   return {

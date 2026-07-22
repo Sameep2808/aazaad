@@ -14,6 +14,7 @@ vi.mock('../lib/ipfs', async (importOriginal) => {
     createHeliaNode: vi.fn(),
     uploadFileToIPFS: vi.fn(),
     seedCid: vi.fn(),
+    unseedCid: vi.fn(),
   }
 })
 
@@ -33,6 +34,7 @@ describe('IPFS hooks', () => {
     vi.mocked(ipfs.createHeliaNode).mockResolvedValue(mockNode)
     vi.mocked(ipfs.uploadFileToIPFS).mockResolvedValue('bafytestcid123')
     vi.mocked(ipfs.seedCid).mockResolvedValue(undefined)
+    vi.mocked(ipfs.unseedCid).mockResolvedValue(undefined)
     await db.seeds.clear()
   })
 
@@ -86,6 +88,32 @@ describe('IPFS hooks', () => {
     })
 
     expect(ipfs.seedCid).toHaveBeenCalledWith(mockNode, 'bafyseedcid')
-    await expect(result.current.isSeeded('bafyseedcid')).resolves.toBe(true)
+    expect(result.current.isSeeded('bafyseedcid')).toBe(true)
+  })
+
+  it('useIPFSSeed toggleSeed turns seeding off', async () => {
+    const { result } = renderHook(() => useIPFSSeed(), { wrapper })
+
+    await waitFor(() => expect(ipfs.createHeliaNode).toHaveBeenCalled())
+
+    await waitFor(async () => {
+      await act(async () => {
+        try {
+          await result.current.seed('bafytoggle')
+        } catch {
+          // not ready
+        }
+      })
+      expect(await db.seeds.get('bafytoggle')).toBeTruthy()
+    })
+
+    await act(async () => {
+      const status = await result.current.toggleSeed('bafytoggle')
+      expect(status).toBe('unseeded')
+    })
+
+    expect(ipfs.unseedCid).toHaveBeenCalledWith(mockNode, 'bafytoggle')
+    expect(await db.seeds.get('bafytoggle')).toBeUndefined()
+    expect(result.current.isSeeded('bafytoggle')).toBe(false)
   })
 })

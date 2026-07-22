@@ -38,7 +38,14 @@ export function PostCard({
   onChanged?: () => void
   onEngage?: EngageHandler
 }) {
-  const { seed, seeding } = useIPFSSeed()
+  const {
+    toggleSeed,
+    busyCid: seedBusyCid,
+    error: seedError,
+    isSeeded,
+    hydrate: hydrateSeed,
+    noteSeeded,
+  } = useIPFSSeed()
   const {
     likes,
     comments,
@@ -55,7 +62,6 @@ export function PostCard({
   const mediaRef = useRef<AutoMediaHandle>(null)
   const [commentText, setCommentText] = useState('')
   const [showComment, setShowComment] = useState(false)
-  const [seeded, setSeeded] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
 
   useEffect(() => {
@@ -67,8 +73,13 @@ export function PostCard({
   }, [repostError])
 
   useEffect(() => {
+    if (seedError) setMsg(seedError)
+  }, [seedError])
+
+  useEffect(() => {
     void hydrate([post.id])
-  }, [post.id, hydrate])
+    void hydrateSeed([post.cid])
+  }, [post.id, post.cid, hydrate, hydrateSeed])
 
   const onDoubleTapLike = useCallback(() => {
     void likeOnly()
@@ -78,18 +89,23 @@ export function PostCard({
     mediaRef.current?.togglePlayPause()
   }, [])
 
-  async function onSeed() {
+  async function onToggleSeed() {
     setMsg(null)
     try {
-      await seed(post.cid)
-      setSeeded(true)
-      setMsg('Seeding to the network from this device')
+      const result = await toggleSeed(post.cid)
+      setMsg(
+        result === 'seeded'
+          ? 'Seeding this post from your device'
+          : 'Stopped seeding this post',
+      )
     } catch (err) {
       setMsg(err instanceof Error ? err.message : 'Seed failed')
     }
   }
 
   const alreadyReposted = isReposted(post.id)
+  const seeded = isSeeded(post.cid)
+  const seedBusy = seedBusyCid === post.cid
 
   return (
     <article className="border-b border-zinc-800 pb-4">
@@ -151,7 +167,9 @@ export function PostCard({
             onClick={() => {
               void toggleRepost(post).then((result) => {
                 if (result === 'reposted') {
-                  setMsg('Reposted — your followers will see this')
+                  noteSeeded(post.cid)
+                  void hydrateSeed([post.cid])
+                  setMsg('Reposted — auto-seeding this post')
                 } else if (result === 'unreposted') {
                   setMsg('Removed repost')
                 }
@@ -172,12 +190,18 @@ export function PostCard({
           </button>
           <button
             type="button"
-            disabled={seeding || seeded}
-            onClick={() => void onSeed()}
-            className="ml-auto flex min-h-11 touch-manipulation items-center gap-1.5 rounded-full border border-emerald-700/60 bg-emerald-950/40 px-3 py-1 text-xs font-medium text-emerald-300 disabled:opacity-50"
+            disabled={seedBusy}
+            onClick={() => void onToggleSeed()}
+            className={[
+              'ml-auto flex min-h-11 touch-manipulation items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium disabled:opacity-50',
+              seeded
+                ? 'border-emerald-500/80 bg-emerald-900/50 text-emerald-300'
+                : 'border-zinc-700 bg-zinc-900/60 text-zinc-300',
+            ].join(' ')}
+            aria-pressed={seeded}
           >
             <Radio className="h-3.5 w-3.5" />
-            {seeded ? 'Seeding' : seeding ? 'Starting…' : 'Seed'}
+            {seedBusy ? '…' : seeded ? 'Seeding' : 'Seed'}
           </button>
         </div>
 

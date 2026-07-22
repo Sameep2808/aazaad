@@ -91,6 +91,20 @@ export async function seedCid(node: HeliaNode, cidString: string): Promise<void>
   }
 }
 
+/**
+ * Stop intentionally seeding a CID by unpinning it from the local Helia node.
+ */
+export async function unseedCid(
+  node: HeliaNode,
+  cidString: string,
+): Promise<void> {
+  const cid = CID.parse(cidString)
+  if (!(await node.pins.isPinned(cid))) return
+  for await (const _ of node.pins.rm(cid)) {
+    // drain unpin walk
+  }
+}
+
 export function parseCid(cidString: string): CID {
   return CID.parse(cidString)
 }

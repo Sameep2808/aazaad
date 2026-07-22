@@ -3,6 +3,7 @@ import {
   createHeliaNode,
   uploadFileToIPFS,
   seedCid,
+  unseedCid,
   parseCid,
 } from './ipfs'
 
@@ -65,5 +66,18 @@ describe('ipfs layer', () => {
       if (pin.cid.toString() === cid) pinned = true
     }
     expect(pinned).toBe(true)
+  })
+
+  it('unseeds by unpinning a previously seeded CID', async () => {
+    const node = await createHeliaNode({ idbName: `unseed-${Date.now()}` })
+    nodes.push(node)
+
+    const file = new File([new TextEncoder().encode('unpin-me')], 'u.txt')
+    const cid = await uploadFileToIPFS(node, file)
+    await seedCid(node, cid)
+    expect(await node.pins.isPinned(parseCid(cid))).toBe(true)
+
+    await unseedCid(node, cid)
+    expect(await node.pins.isPinned(parseCid(cid))).toBe(false)
   })
 })

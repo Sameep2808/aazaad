@@ -1,8 +1,8 @@
 import { Link, useLocation } from 'react-router-dom'
-import { PlusSquare, ArrowLeft } from 'lucide-react'
+import { PlusSquare, ArrowLeft, MessageCircle } from 'lucide-react'
 
 /**
- * Instagram-style top bar: create (upload) on the left, title centered.
+ * Instagram-style top bar: create on the left, messages on the right.
  */
 export function AppHeader({ title = 'aazaad' }: { title?: string }) {
   const location = useLocation()
@@ -36,8 +36,17 @@ export function AppHeader({ title = 'aazaad' }: { title?: string }) {
           {isUpload ? 'New post' : title}
         </h1>
 
-        {/* Balance the left control for optical centering */}
-        <div className="ml-auto h-11 w-11" aria-hidden />
+        {isUpload ? (
+          <div className="ml-auto h-11 w-11" aria-hidden />
+        ) : (
+          <Link
+            to="/messages"
+            className="ml-auto flex h-11 w-11 touch-manipulation items-center justify-center rounded-full text-zinc-100 active:bg-zinc-800"
+            aria-label="Messages"
+          >
+            <MessageCircle className="h-6 w-6" strokeWidth={1.75} />
+          </Link>
+        )}
       </div>
     </header>
   )

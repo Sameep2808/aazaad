@@ -143,23 +143,31 @@ export function UserProfile() {
                 Edit profile
               </Link>
             ) : (
-              <button
-                type="button"
-                disabled={!follow.canFollow || follow.busy}
-                onClick={() => void follow.toggle()}
-                className={[
-                  'rounded-lg px-4 py-1.5 text-xs font-semibold disabled:opacity-50',
-                  follow.following
-                    ? 'border border-zinc-600 text-zinc-200'
-                    : 'bg-white text-zinc-950',
-                ].join(' ')}
-              >
-                {follow.busy
-                  ? '…'
-                  : follow.following
-                    ? 'Following'
-                    : 'Follow'}
-              </button>
+              <>
+                <button
+                  type="button"
+                  disabled={!follow.canFollow || follow.busy}
+                  onClick={() => void follow.toggle()}
+                  className={[
+                    'rounded-lg px-4 py-1.5 text-xs font-semibold disabled:opacity-50',
+                    follow.following
+                      ? 'border border-zinc-600 text-zinc-200'
+                      : 'bg-white text-zinc-950',
+                  ].join(' ')}
+                >
+                  {follow.busy
+                    ? '…'
+                    : follow.following
+                      ? 'Following'
+                      : 'Follow'}
+                </button>
+                <Link
+                  to={`/messages/${npub}`}
+                  className="rounded-lg border border-zinc-600 px-3 py-1.5 text-xs font-semibold text-zinc-200"
+                >
+                  Message
+                </Link>
+              </>
             )}
           </div>
 
