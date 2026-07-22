@@ -1,7 +1,9 @@
+import { useEffect, useMemo } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { useHelia } from '../context/HeliaContext'
 import { useProfileStats } from '../hooks/useProfileStats'
 import { useUserPosts } from '../hooks/useUserPosts'
+import { useUpdateProfilePhoto } from '../hooks/useUpdateProfilePhoto'
 import { AuthForms } from '../components/AuthForms'
 import { ProfileHeader } from '../components/ProfileHeader'
 import { ProfilePostsGrid } from '../components/ProfilePostsGrid'
@@ -11,9 +13,25 @@ export function Profile() {
   const { ready: heliaReady, error: heliaError, retry } = useHelia()
   const stats = useProfileStats(pubkey)
   const userPosts = useUserPosts(pubkey)
+  const photo = useUpdateProfilePhoto()
 
-  // Prefer the actual media post grid count for the Instagram-style header
   const postsCount = Math.max(stats.postsCount, userPosts.posts.length)
+
+  useEffect(() => {
+    if (pubkey) void photo.load()
+  }, [pubkey, photo.load])
+
+  const headerProfile = useMemo(() => {
+    if (photo.profile) return photo.profile
+    if (!pubkey) return null
+    return {
+      pubkey,
+      username,
+      displayName: username,
+      pictureUrl: null,
+      pictureCid: null,
+    }
+  }, [photo.profile, pubkey, username])
 
   if (!ready) {
     return (
@@ -40,20 +58,29 @@ export function Profile() {
           <ProfileHeader
             username={username}
             npub={npub}
+            profile={headerProfile}
             postsCount={postsCount}
             followersCount={stats.followersCount}
             followingCount={stats.followingCount}
             followers={stats.followers}
             following={stats.following}
             loading={stats.loading || userPosts.loading}
+            photoBusy={photo.busy}
             onLogout={logout}
             onRefresh={() => {
               void stats.refresh()
               void userPosts.refresh()
+              void photo.load()
+            }}
+            onChangePhoto={async (file) => {
+              await photo.updatePhoto(file)
             }}
           />
           {stats.error && (
             <p className="text-sm text-amber-400">{stats.error}</p>
+          )}
+          {photo.error && (
+            <p className="text-sm text-red-400">{photo.error}</p>
           )}
 
           <ProfilePostsGrid

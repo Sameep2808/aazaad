@@ -5,6 +5,10 @@ import {
   signWithSecretKey,
 } from './nostr'
 import { db, type AccountRow } from './db'
+import {
+  metadataToProfileRow,
+  saveProfileRow,
+} from './profiles'
 
 const USERNAME_RE = /^[a-z0-9_]{3,30}$/
 
@@ -83,6 +87,14 @@ export async function createAccount(
     createdAt: now,
     updatedAt: now,
   })
+
+  await saveProfileRow(
+    metadataToProfileRow(identity.pubkey, {
+      name: normalized,
+      display_name: normalized,
+      about: 'aazaad user',
+    }),
+  )
 
   // Publish Kind 0 metadata so relays know the display name
   try {

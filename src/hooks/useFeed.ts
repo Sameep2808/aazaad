@@ -1,17 +1,19 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   countByTarget,
+  fetchAuthorsMediaEvents,
   fetchCommentsFor,
   fetchLikesFor,
-  fetchRecentPostEvents,
   parseFeedPost,
   rankPosts,
   type FeedPost,
 } from '../lib/posts'
 import {
   cachePostsFromEvents,
+  filterFollowingFeed,
   loadCachedPosts,
   mergePosts,
+  updateCachedEngagement,
 } from '../lib/postCache'
 
 export interface UseFeedResult {
@@ -19,6 +21,11 @@ export interface UseFeedResult {
   loading: boolean
   error: string | null
   refresh: () => Promise<void>
+  /** Instant local engagement update (likes/comments) without waiting on relays */
+  applyEngagement: (
+    postId: string,
+    patch: { likes?: number; comments?: number },
+  ) => void
 }
 
 async function withEngagement(posts: FeedPost[]): Promise<FeedPost[]> {
@@ -37,49 +44,118 @@ async function withEngagement(posts: FeedPost[]): Promise<FeedPost[]> {
   }))
 }
 
-export function useFeed(): UseFeedResult {
+export function useFeed(
+  viewerPubkey: string | null | undefined,
+  following: string[],
+): UseFeedResult {
   const [posts, setPosts] = useState<FeedPost[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const followingKey = useMemo(
+    () => [...following].sort().join(','),
+    [following],
+  )
+  const followingList = useMemo(
+    () => (followingKey ? followingKey.split(',') : []),
+    [followingKey],
+  )
+
+  const applyEngagement = useCallback(
+    (postId: string, patch: { likes?: number; comments?: number }) => {
+      setPosts((prev) =>
+        prev.map((post) =>
+          post.id === postId
+            ? {
+                ...post,
+                likes: patch.likes !== undefined ? patch.likes : post.likes,
+                comments:
+                  patch.comments !== undefined ? patch.comments : post.comments,
+              }
+            : post,
+        ),
+      )
+      void updateCachedEngagement(postId, patch)
+    },
+    [],
+  )
+
   const refresh = useCallback(async () => {
+    if (!viewerPubkey) {
+      setPosts([])
+      setLoading(false)
+      setError(null)
+      return
+    }
+
     setLoading(true)
     setError(null)
+
+    const allowedAuthors = [viewerPubkey, ...followingList]
+
     try {
-      // Show cached media posts immediately (includes posts you just made)
-      const cached = await loadCachedPosts()
+      const cached = filterFollowingFeed(
+        await loadCachedPosts(),
+        viewerPubkey,
+        followingList,
+      )
       if (cached.length > 0) {
         setPosts(rankPosts(cached))
+      } else {
+        setPosts([])
       }
 
-      const events = await fetchRecentPostEvents()
+      const events = await fetchAuthorsMediaEvents(allowedAuthors)
       const remote = events
         .map(parseFeedPost)
         .filter((p): p is FeedPost => p !== null)
 
-      // Persist relay posts locally so Home stays populated offline
       await cachePostsFromEvents(events)
 
-      const merged = mergePosts(cached, remote)
+      const merged = filterFollowingFeed(
+        mergePosts(cached, remote),
+        viewerPubkey,
+        followingList,
+      )
       const engaged = await withEngagement(merged)
-      setPosts(rankPosts(engaged))
+      for (const post of engaged) {
+        void updateCachedEngagement(post.id, {
+          likes: post.likes,
+          comments: post.comments,
+        })
+      }
+      setPosts((prev) => {
+        const prevById = new Map(prev.map((p) => [p.id, p]))
+        const mergedEngaged = engaged.map((post) => {
+          const local = prevById.get(post.id)
+          return {
+            ...post,
+            likes: Math.max(post.likes, local?.likes ?? 0),
+            comments: Math.max(post.comments, local?.comments ?? 0),
+          }
+        })
+        return rankPosts(mergedEngaged)
+      })
     } catch (err) {
-      // If relays fail, keep showing whatever we already cached
-      const cached = await loadCachedPosts()
+      const cached = filterFollowingFeed(
+        await loadCachedPosts(),
+        viewerPubkey,
+        followingList,
+      )
       if (cached.length > 0) {
         setPosts(rankPosts(cached))
-        setError('Relays unreachable — showing cached posts')
+        setError('Relays unreachable — showing cached following feed')
       } else {
         setError(err instanceof Error ? err.message : 'Failed to load feed')
       }
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [viewerPubkey, followingList])
 
   useEffect(() => {
     void refresh()
   }, [refresh])
 
-  return { posts, loading, error, refresh }
+  return { posts, loading, error, refresh, applyEngagement }
 }

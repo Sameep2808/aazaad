@@ -223,32 +223,51 @@ export async function fetchAuthorMediaEvents(
   relays: readonly string[] = DEFAULT_RELAYS,
   maxWait = 5000,
 ): Promise<Event[]> {
+  return fetchAuthorsMediaEvents([pubkey], relays, maxWait)
+}
+
+/**
+ * Fetch media posts for many authors (following feed).
+ * Authors are chunked so relays don't reject oversized filters.
+ */
+export async function fetchAuthorsMediaEvents(
+  authors: string[],
+  relays: readonly string[] = DEFAULT_RELAYS,
+  maxWait = 5000,
+): Promise<Event[]> {
+  const unique = [...new Set(authors.filter(Boolean))]
+  if (unique.length === 0) return []
+
   const pool = getPool()
   const relayList = [...relays]
-
-  const [videos, tagged, notes] = await Promise.all([
-    pool.querySync(
-      relayList,
-      { kinds: [21, 22], authors: [pubkey], limit: 100 },
-      { maxWait },
-    ),
-    pool.querySync(
-      relayList,
-      { kinds: [1], authors: [pubkey], '#t': ['aazaad'], limit: 100 },
-      { maxWait },
-    ),
-    pool.querySync(
-      relayList,
-      { kinds: [1], authors: [pubkey], limit: 100 },
-      { maxWait },
-    ),
-  ])
-
-  const byId = new Map<string, Event>()
-  for (const event of [...videos, ...tagged, ...notes]) {
-    byId.set(event.id, event)
+  const chunkSize = 25
+  const chunks: string[][] = []
+  for (let i = 0; i < unique.length; i += chunkSize) {
+    chunks.push(unique.slice(i, i + chunkSize))
   }
 
+  const batches = await Promise.all(
+    chunks.map(async (chunk) => {
+      const [videos, tagged] = await Promise.all([
+        pool.querySync(
+          relayList,
+          { kinds: [21, 22], authors: chunk, limit: 80 },
+          { maxWait },
+        ),
+        pool.querySync(
+          relayList,
+          { kinds: [1], authors: chunk, '#t': ['aazaad'], limit: 80 },
+          { maxWait },
+        ),
+      ])
+      return [...videos, ...tagged]
+    }),
+  )
+
+  const byId = new Map<string, Event>()
+  for (const event of batches.flat()) {
+    byId.set(event.id, event)
+  }
   return [...byId.values()].filter((e) => parseFeedPost(e) !== null)
 }
 

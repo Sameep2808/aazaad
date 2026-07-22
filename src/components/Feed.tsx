@@ -1,89 +1,49 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Heart, MessageCircle, Radio } from 'lucide-react'
-import { useAuth } from '../context/AuthContext'
 import { useIPFSSeed } from '../hooks/useIPFSSeed'
 import {
-  buildCommentEvent,
-  buildLikeEvent,
-  publishEvent,
-  type FeedPost,
-} from '../lib/posts'
+  useOptimisticEngagement,
+  type EngageHandler,
+} from '../hooks/useOptimisticEngagement'
+import { useProfiles } from '../hooks/useProfiles'
+import type { FeedPost } from '../lib/posts'
+import type { ResolvedProfile } from '../lib/profiles'
 import { AutoMedia } from './AutoMedia'
+import { PostAuthorBar } from './UserAvatar'
 
 interface FeedProps {
   posts: FeedPost[]
   loading: boolean
   error: string | null
   onRefresh: () => void
-  /** Compact header for embedding under profile */
+  onEngage?: EngageHandler
   compact?: boolean
   emptyMessage?: string
 }
 
-/** @deprecated Prefer AutoMedia — kept for any external imports */
 export { AutoMedia as MediaPlayer } from './AutoMedia'
 
 export function PostCard({
   post,
-  onChanged,
+  profile,
+  onEngage,
 }: {
   post: FeedPost
-  onChanged: () => void
+  profile?: ResolvedProfile | null
+  onChanged?: () => void
+  onEngage?: EngageHandler
 }) {
-  const { pubkey, signEvent } = useAuth()
   const { seed, seeding } = useIPFSSeed()
-  const [comment, setComment] = useState('')
+  const { likes, comments, busy, error, like, comment } =
+    useOptimisticEngagement(post, onEngage)
+  const [commentText, setCommentText] = useState('')
   const [showComment, setShowComment] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [localLikes, setLocalLikes] = useState(post.likes)
-  const [localComments, setLocalComments] = useState(post.comments)
   const [seeded, setSeeded] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
 
   useEffect(() => {
-    setLocalLikes(post.likes)
-    setLocalComments(post.comments)
-  }, [post.id, post.likes, post.comments])
-
-  async function onLike() {
-    if (!pubkey) {
-      setMsg('Log in to like')
-      return
-    }
-    setBusy(true)
-    setMsg(null)
-    try {
-      const signed = await signEvent(buildLikeEvent(post.raw))
-      await publishEvent(signed)
-      setLocalLikes((n) => n + 1)
-    } catch (err) {
-      setMsg(err instanceof Error ? err.message : 'Like failed')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function onComment() {
-    if (!pubkey) {
-      setMsg('Log in to comment')
-      return
-    }
-    if (!comment.trim()) return
-    setBusy(true)
-    setMsg(null)
-    try {
-      const signed = await signEvent(buildCommentEvent(post.raw, comment.trim()))
-      await publishEvent(signed)
-      setLocalComments((n) => n + 1)
-      setComment('')
-      setShowComment(false)
-      onChanged()
-    } catch (err) {
-      setMsg(err instanceof Error ? err.message : 'Comment failed')
-    } finally {
-      setBusy(false)
-    }
-  }
+    if (error) setMsg(error)
+  }, [error])
 
   async function onSeed() {
     setMsg(null)
@@ -98,20 +58,17 @@ export function PostCard({
 
   return (
     <article className="border-b border-zinc-800 pb-4">
-      <div className="px-4 py-2">
-        <p className="truncate font-mono text-[10px] text-zinc-500">{post.pubkey}</p>
-      </div>
+      <PostAuthorBar profile={profile} pubkey={post.pubkey} variant="feed" />
       <AutoMedia post={post} variant="feed" />
       <div className="space-y-2 px-4 pt-3">
         <div className="flex items-center gap-4">
           <button
             type="button"
-            disabled={busy}
-            onClick={() => void onLike()}
+            onClick={() => void like()}
             className="flex items-center gap-1.5 text-sm text-zinc-200"
           >
             <Heart className="h-5 w-5" />
-            {localLikes}
+            {likes}
           </button>
           <button
             type="button"
@@ -119,7 +76,7 @@ export function PostCard({
             className="flex items-center gap-1.5 text-sm text-zinc-200"
           >
             <MessageCircle className="h-5 w-5" />
-            {localComments}
+            {comments}
           </button>
           <button
             type="button"
@@ -133,21 +90,33 @@ export function PostCard({
         </div>
 
         {post.caption && (
-          <p className="whitespace-pre-wrap text-sm text-zinc-200">{post.caption}</p>
+          <p className="whitespace-pre-wrap text-sm text-zinc-200">
+            {profile?.username && (
+              <span className="mr-1.5 font-semibold">@{profile.username}</span>
+            )}
+            {post.caption}
+          </p>
         )}
 
         {showComment && (
           <div className="flex gap-2">
             <input
-              value={comment}
-              onChange={(e) => setComment(e.target.value)}
+              value={commentText}
+              onChange={(e) => setCommentText(e.target.value)}
               placeholder="Add a comment…"
               className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none"
             />
             <button
               type="button"
               disabled={busy}
-              onClick={() => void onComment()}
+              onClick={() => {
+                void comment(commentText).then((ok) => {
+                  if (ok) {
+                    setCommentText('')
+                    setShowComment(false)
+                  }
+                })
+              }}
               className="rounded-lg bg-white px-3 py-2 text-xs font-semibold text-zinc-900"
             >
               Post
@@ -166,9 +135,13 @@ export function Feed({
   loading,
   error,
   onRefresh,
+  onEngage,
   compact = false,
-  emptyMessage = 'No media posts on relays yet.',
+  emptyMessage = 'No posts from people you follow yet.',
 }: FeedProps) {
+  const pubkeys = useMemo(() => posts.map((p) => p.pubkey), [posts])
+  const { get: getProfile } = useProfiles(pubkeys)
+
   if (loading && posts.length === 0) {
     return (
       <div className="flex flex-1 items-center justify-center text-sm text-zinc-400">
@@ -195,11 +168,18 @@ export function Feed({
       {posts.length === 0 && !loading ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center">
           <p className="text-sm text-zinc-400">{emptyMessage}</p>
-          <p className="text-xs text-zinc-600">Upload a photo or reel to see it here.</p>
+          <p className="text-xs text-zinc-600">
+            Your posts and posts from accounts you follow show up here.
+          </p>
         </div>
       ) : (
         posts.map((post) => (
-          <PostCard key={post.id} post={post} onChanged={onRefresh} />
+          <PostCard
+            key={post.id}
+            post={post}
+            profile={getProfile(post.pubkey)}
+            onEngage={onEngage}
+          />
         ))
       )}
     </div>

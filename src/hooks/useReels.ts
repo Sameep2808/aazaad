@@ -11,6 +11,7 @@ import {
   cachePostsFromEvents,
   loadCachedPosts,
   mergePosts,
+  updateCachedEngagement,
 } from '../lib/postCache'
 
 export interface UseReelsResult {
@@ -18,11 +19,17 @@ export interface UseReelsResult {
   loading: boolean
   error: string | null
   refresh: () => Promise<void>
+  applyEngagement: (
+    postId: string,
+    patch: { likes?: number; comments?: number },
+  ) => void
 }
 
 /** Newest-first ordering for the Reels swiper. */
 export function sortReelsLatest(posts: FeedPost[]): FeedPost[] {
-  return [...posts].sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id))
+  return [...posts].sort(
+    (a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id),
+  )
 }
 
 /**
@@ -33,6 +40,25 @@ export function useReels(): UseReelsResult {
   const [posts, setPosts] = useState<FeedPost[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const applyEngagement = useCallback(
+    (postId: string, patch: { likes?: number; comments?: number }) => {
+      setPosts((prev) =>
+        prev.map((post) =>
+          post.id === postId
+            ? {
+                ...post,
+                likes: patch.likes !== undefined ? patch.likes : post.likes,
+                comments:
+                  patch.comments !== undefined ? patch.comments : post.comments,
+              }
+            : post,
+        ),
+      )
+      void updateCachedEngagement(postId, patch)
+    },
+    [],
+  )
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -64,7 +90,19 @@ export function useReels(): UseReelsResult {
         comments: Math.max(post.comments, commentCounts.get(post.id) ?? 0),
       }))
 
-      setPosts(sortReelsLatest(engaged))
+      setPosts((prev) => {
+        const prevById = new Map(prev.map((p) => [p.id, p]))
+        return sortReelsLatest(
+          engaged.map((post) => {
+            const local = prevById.get(post.id)
+            return {
+              ...post,
+              likes: Math.max(post.likes, local?.likes ?? 0),
+              comments: Math.max(post.comments, local?.comments ?? 0),
+            }
+          }),
+        )
+      })
     } catch (err) {
       const cached = await loadCachedPosts()
       if (cached.length > 0) {
@@ -83,7 +121,7 @@ export function useReels(): UseReelsResult {
   }, [refresh])
 
   return useMemo(
-    () => ({ posts, loading, error, refresh }),
-    [posts, loading, error, refresh],
+    () => ({ posts, loading, error, refresh, applyEngagement }),
+    [posts, loading, error, refresh, applyEngagement],
   )
 }

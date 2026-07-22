@@ -1,81 +1,47 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Heart, MessageCircle, Radio } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { useAuth } from '../context/AuthContext'
 import { useIPFSSeed } from '../hooks/useIPFSSeed'
 import {
-  buildCommentEvent,
-  buildLikeEvent,
-  publishEvent,
-  type FeedPost,
-} from '../lib/posts'
+  useOptimisticEngagement,
+  type EngageHandler,
+} from '../hooks/useOptimisticEngagement'
+import { useProfiles } from '../hooks/useProfiles'
+import type { FeedPost } from '../lib/posts'
+import type { ResolvedProfile } from '../lib/profiles'
 import { AutoMedia } from './AutoMedia'
+import { PostAuthorBar } from './UserAvatar'
 
 interface ReelsProps {
   posts: FeedPost[]
   loading: boolean
   error: string | null
   onRefresh: () => void
+  onEngage?: EngageHandler
 }
 
 function ReelSlide({
   post,
   root,
+  profile,
+  onEngage,
 }: {
   post: FeedPost
   root: Element | null
+  profile?: ResolvedProfile | null
+  onEngage?: EngageHandler
 }) {
-  const { pubkey, signEvent } = useAuth()
   const { seed, seeding } = useIPFSSeed()
-  const [likes, setLikes] = useState(post.likes)
-  const [comments, setComments] = useState(post.comments)
+  const { likes, comments, busy, error, like, comment } =
+    useOptimisticEngagement(post, onEngage)
   const [showComment, setShowComment] = useState(false)
-  const [comment, setComment] = useState('')
+  const [commentText, setCommentText] = useState('')
   const [seeded, setSeeded] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    setLikes(post.likes)
-    setComments(post.comments)
-  }, [post.id, post.likes, post.comments])
-
-  async function onLike() {
-    if (!pubkey) {
-      setMsg('Log in to like')
-      return
-    }
-    setBusy(true)
-    try {
-      const signed = await signEvent(buildLikeEvent(post.raw))
-      await publishEvent(signed)
-      setLikes((n) => n + 1)
-    } catch (err) {
-      setMsg(err instanceof Error ? err.message : 'Like failed')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function onComment() {
-    if (!pubkey) {
-      setMsg('Log in to comment')
-      return
-    }
-    if (!comment.trim()) return
-    setBusy(true)
-    try {
-      const signed = await signEvent(buildCommentEvent(post.raw, comment.trim()))
-      await publishEvent(signed)
-      setComments((n) => n + 1)
-      setComment('')
-      setShowComment(false)
-    } catch (err) {
-      setMsg(err instanceof Error ? err.message : 'Comment failed')
-    } finally {
-      setBusy(false)
-    }
-  }
+    if (error) setMsg(error)
+  }, [error])
 
   async function onSeed() {
     try {
@@ -96,23 +62,22 @@ function ReelSlide({
         className="absolute inset-0 h-full w-full"
       />
 
-      {/* Gradient + caption */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent px-4 pb-20 pt-24">
-        <p className="pointer-events-auto max-w-[75%] text-sm text-white drop-shadow">
-          {post.caption || 'aazaad'}
-        </p>
-        <p className="mt-1 max-w-[75%] truncate font-mono text-[10px] text-white/50">
-          {post.pubkey.slice(0, 12)}…
-        </p>
+        <div className="pointer-events-auto mb-2 max-w-[75%]">
+          <PostAuthorBar profile={profile} pubkey={post.pubkey} variant="reel" />
+        </div>
+        {post.caption && (
+          <p className="pointer-events-auto max-w-[75%] text-sm text-white drop-shadow">
+            {post.caption}
+          </p>
+        )}
         {msg && <p className="mt-1 text-xs text-white/70">{msg}</p>}
       </div>
 
-      {/* Right-side actions */}
       <div className="absolute bottom-24 right-3 z-10 flex flex-col items-center gap-5">
         <button
           type="button"
-          disabled={busy}
-          onClick={() => void onLike()}
+          onClick={() => void like()}
           className="flex flex-col items-center gap-1 text-white"
         >
           <span className="rounded-full bg-black/35 p-3 backdrop-blur-sm">
@@ -150,15 +115,22 @@ function ReelSlide({
       {showComment && (
         <div className="absolute inset-x-0 bottom-16 z-20 flex gap-2 bg-black/80 px-3 py-2 backdrop-blur-md">
           <input
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
+            value={commentText}
+            onChange={(e) => setCommentText(e.target.value)}
             placeholder="Add a comment…"
             className="flex-1 rounded-full border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-white outline-none"
           />
           <button
             type="button"
             disabled={busy}
-            onClick={() => void onComment()}
+            onClick={() => {
+              void comment(commentText).then((ok) => {
+                if (ok) {
+                  setCommentText('')
+                  setShowComment(false)
+                }
+              })
+            }}
             className="rounded-full bg-white px-4 text-xs font-semibold text-zinc-900"
           >
             Post
@@ -169,9 +141,11 @@ function ReelSlide({
   )
 }
 
-export function Reels({ posts, loading, error, onRefresh }: ReelsProps) {
+export function Reels({ posts, loading, error, onRefresh, onEngage }: ReelsProps) {
   const scrollerRef = useRef<HTMLDivElement | null>(null)
   const [root, setRoot] = useState<Element | null>(null)
+  const pubkeys = useMemo(() => posts.map((p) => p.pubkey), [posts])
+  const { get: getProfile } = useProfiles(pubkeys)
 
   useEffect(() => {
     setRoot(scrollerRef.current)
@@ -231,7 +205,12 @@ export function Reels({ posts, loading, error, onRefresh }: ReelsProps) {
       >
         {posts.map((post) => (
           <div key={post.id} className="h-full w-full snap-start snap-always">
-            <ReelSlide post={post} root={root} />
+            <ReelSlide
+              post={post}
+              root={root}
+              profile={getProfile(post.pubkey)}
+              onEngage={onEngage}
+            />
           </div>
         ))}
       </div>

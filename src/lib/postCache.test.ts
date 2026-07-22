@@ -5,6 +5,7 @@ import {
   loadCachedPosts,
   loadCachedPostsByAuthor,
   mergePosts,
+  filterFollowingFeed,
 } from './postCache'
 import { db } from './db'
 import type { FeedPost } from './posts'
@@ -74,5 +75,31 @@ describe('post cache', () => {
     const merged = mergePosts(local, remote)
     expect(merged).toHaveLength(2)
     expect(merged.find((p) => p.id === '1')?.likes).toBe(5)
+  })
+
+  it('filters home feed to self + following only', () => {
+    const me = 'a'.repeat(64)
+    const friend = 'b'.repeat(64)
+    const stranger = 'c'.repeat(64)
+    const base = {
+      caption: '',
+      cid: 'bafy',
+      mediaType: 'video' as const,
+      mimeType: 'video/mp4',
+      gatewayUrl: '',
+      score: 0,
+      raw: {} as Event,
+      likes: 0,
+      comments: 0,
+      createdAt: 1,
+    }
+    const posts: FeedPost[] = [
+      { ...base, id: '1', pubkey: me },
+      { ...base, id: '2', pubkey: friend },
+      { ...base, id: '3', pubkey: stranger },
+    ]
+    const filtered = filterFollowingFeed(posts, me, [friend])
+    expect(filtered.map((p) => p.id).sort()).toEqual(['1', '2'])
+    expect(filterFollowingFeed(posts, null, [friend])).toEqual([])
   })
 })

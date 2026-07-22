@@ -1,19 +1,26 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { Camera } from 'lucide-react'
 import type { ProfilePerson } from '../hooks/useProfileStats'
+import type { ResolvedProfile } from '../lib/profiles'
+import { UserAvatar } from './UserAvatar'
+import { displayHandle } from '../lib/profiles'
 
 type ListTab = 'followers' | 'following' | null
 
 interface ProfileHeaderProps {
   username: string | null
   npub: string | null
+  profile: ResolvedProfile | null
   postsCount: number
   followersCount: number
   followingCount: number
   followers: ProfilePerson[]
   following: ProfilePerson[]
   loading: boolean
+  photoBusy?: boolean
   onLogout: () => void
   onRefresh: () => void
+  onChangePhoto: (file: File) => Promise<void>
 }
 
 function PersonList({
@@ -59,24 +66,80 @@ function PersonList({
 export function ProfileHeader({
   username,
   npub,
+  profile,
   postsCount,
   followersCount,
   followingCount,
   followers,
   following,
   loading,
+  photoBusy,
   onLogout,
   onRefresh,
+  onChangePhoto,
 }: ProfileHeaderProps) {
   const [listTab, setListTab] = useState<ListTab>(null)
-  const displayName = username ? `@${username}` : 'Guest'
+  const [photoError, setPhotoError] = useState<string | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const displayName = displayHandle(
+    profile ?? {
+      pubkey: '',
+      username,
+      displayName: username,
+      pictureUrl: null,
+      pictureCid: null,
+    },
+  )
+
+  useEffect(() => {
+    setPhotoError(null)
+  }, [profile?.pictureCid])
 
   return (
     <div className="space-y-5">
       <div className="flex items-start gap-4">
-        <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-zinc-600 to-zinc-800 text-2xl font-bold uppercase text-white">
-          {(username ?? 'aa').slice(0, 2)}
+        <div className="relative shrink-0">
+          <button
+            type="button"
+            disabled={photoBusy}
+            onClick={() => fileRef.current?.click()}
+            className="relative rounded-full focus:outline-none focus:ring-2 focus:ring-zinc-500"
+            aria-label="Change profile photo"
+          >
+            <UserAvatar
+              profile={
+                profile ?? {
+                  pubkey: npub ?? '',
+                  username,
+                  displayName: username,
+                  pictureUrl: null,
+                  pictureCid: null,
+                }
+              }
+              size="xl"
+            />
+            <span className="absolute bottom-0 right-0 flex h-7 w-7 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900 text-zinc-200">
+              <Camera className="h-3.5 w-3.5" />
+            </span>
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*,image/heic,image/heif"
+            capture="user"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              e.target.value = ''
+              if (!file) return
+              setPhotoError(null)
+              void onChangePhoto(file).catch((err: Error) =>
+                setPhotoError(err.message),
+              )
+            }}
+          />
         </div>
+
         <div className="min-w-0 flex-1 space-y-3">
           <div className="flex items-center justify-between gap-2">
             <h1 className="truncate text-xl font-semibold tracking-tight">
@@ -113,6 +176,11 @@ export function ProfileHeader({
               <p className="text-xs text-zinc-400">following</p>
             </button>
           </div>
+
+          <p className="text-[11px] text-zinc-500">
+            {photoBusy ? 'Uploading photo…' : 'Tap photo to change'}
+          </p>
+          {photoError && <p className="text-xs text-red-400">{photoError}</p>}
         </div>
       </div>
 
