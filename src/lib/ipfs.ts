@@ -1,0 +1,96 @@
+import { createHelia, type Helia, type HeliaInit } from 'helia'
+import { unixfs, type UnixFS } from '@helia/unixfs'
+import { IDBBlockstore } from 'blockstore-idb'
+import { IDBDatastore } from 'datastore-idb'
+import { CID } from 'multiformats/cid'
+
+export type HeliaNode = Helia & { fs: UnixFS }
+
+export interface CreateHeliaNodeOptions {
+  /** Override stores (useful for tests). Defaults to IndexedDB in browser. */
+  blockstore?: HeliaInit['blockstore']
+  datastore?: HeliaInit['datastore']
+  /** IndexedDB name prefix when using default browser stores */
+  idbName?: string
+}
+
+function canUseIndexedDB(): boolean {
+  return typeof indexedDB !== 'undefined'
+}
+
+/**
+ * Create an in-browser Helia node with IndexedDB-backed block/datastore
+ * so uploaded & seeded content survives reloads.
+ */
+export async function createHeliaNode(
+  options: CreateHeliaNodeOptions = {},
+): Promise<HeliaNode> {
+  const idbName = options.idbName ?? 'aazaad'
+
+  let blockstore = options.blockstore
+  let datastore = options.datastore
+
+  if (!blockstore || !datastore) {
+    if (canUseIndexedDB()) {
+      const idbBlockstore = new IDBBlockstore(`${idbName}-blocks`)
+      const idbDatastore = new IDBDatastore(`${idbName}-data`)
+      await idbBlockstore.open()
+      await idbDatastore.open()
+      blockstore = blockstore ?? idbBlockstore
+      datastore = datastore ?? idbDatastore
+    }
+  }
+
+  const helia = await createHelia({
+    ...(blockstore ? { blockstore } : {}),
+    ...(datastore ? { datastore } : {}),
+  })
+
+  const fs = unixfs(helia)
+  return Object.assign(helia, { fs })
+}
+
+/** Add a File to UnixFS and return its CID string. */
+export async function uploadFileToIPFS(
+  node: HeliaNode,
+  file: File | Blob,
+): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  const cid = await node.fs.addBytes(bytes, {
+    rawLeaves: true,
+  })
+
+  // Pin so the blockstore retains the content (idempotent)
+  if (!(await node.pins.isPinned(cid))) {
+    for await (const _ of node.pins.add(cid)) {
+      // drain pin DAG walk
+    }
+  }
+
+  return cid.toString()
+}
+
+/**
+ * Fetch & pin a CID into the local Helia blockstore (IndexedDB),
+ * actively seeding the content to the network.
+ */
+export async function seedCid(node: HeliaNode, cidString: string): Promise<void> {
+  const cid = CID.parse(cidString)
+
+  // Download all chunks into the local blockstore
+  for await (const _chunk of node.fs.cat(cid)) {
+    // drain stream — side effect is local persistence via blockstore
+  }
+
+  // Explicitly pin so GC won't drop it (idempotent if already pinned)
+  const alreadyPinned = await node.pins.isPinned(cid)
+  if (!alreadyPinned) {
+    for await (const _ of node.pins.add(cid)) {
+      // drain
+    }
+  }
+}
+
+export function parseCid(cidString: string): CID {
+  return CID.parse(cidString)
+}
