@@ -38,8 +38,9 @@ export interface LoadCidOptions {
   timeoutMs?: number
 }
 
-const DEFAULT_LOAD_TIMEOUT_MS = 25_000
-const PROVIDE_TIMEOUT_MS = 20_000
+const DEFAULT_LOAD_TIMEOUT_MS = 45_000
+const PROVIDE_TIMEOUT_MS = 25_000
+const DIAL_TIMEOUT_MS = 12_000
 
 function canUseIndexedDB(): boolean {
   return typeof indexedDB !== 'undefined'
@@ -51,6 +52,19 @@ function sleep(ms: number): Promise<void> {
 
 function isHeliaStarted(node: Helia): boolean {
   return node.status === 'started'
+}
+
+function parseProviderMultiaddrs(addrs: string[]): Multiaddr[] {
+  const out: Multiaddr[] = []
+  for (const addr of addrs) {
+    if (!addr) continue
+    try {
+      out.push(multiaddr(addr))
+    } catch {
+      // skip malformed
+    }
+  }
+  return out
 }
 
 /**
@@ -112,12 +126,22 @@ export function getPeerMultiaddrs(node: HeliaNode): string[] {
   }
 }
 
+/** Libp2p peer id string for this Helia node (empty if not started). */
+export function getHeliaPeerId(node: HeliaNode): string | null {
+  if (!isHeliaStarted(node)) return null
+  try {
+    return node.libp2p?.peerId.toString() ?? null
+  } catch {
+    return null
+  }
+}
+
 /**
  * Wait briefly for circuit-relay / WebRTC listen addrs so followers can dial us.
  */
 export async function waitForDialableAddrs(
   node: HeliaNode,
-  timeoutMs = 8_000,
+  timeoutMs = 12_000,
 ): Promise<string[]> {
   if (!isHeliaStarted(node)) return []
   const deadline = Date.now() + timeoutMs
@@ -139,7 +163,7 @@ export async function waitForDialableAddrs(
 export async function dialProviderAddrs(
   node: HeliaNode,
   addrs: string[],
-  timeoutMs = 6_000,
+  timeoutMs = DIAL_TIMEOUT_MS,
 ): Promise<void> {
   if (!isHeliaStarted(node) || addrs.length === 0) return
   let libp2p: HeliaNode['libp2p']
@@ -152,7 +176,7 @@ export async function dialProviderAddrs(
 
   const signal = AbortSignal.timeout(timeoutMs)
   await Promise.allSettled(
-    addrs.slice(0, 6).map(async (addr) => {
+    addrs.slice(0, 8).map(async (addr) => {
       if (signal.aborted) return
       try {
         await libp2p!.dial(multiaddr(addr))
@@ -274,10 +298,16 @@ async function concatUnixFs(
   node: HeliaNode,
   cid: CID,
   signal: AbortSignal,
+  providerAddrs: string[] = [],
 ): Promise<Uint8Array> {
+  const providers = parseProviderMultiaddrs(providerAddrs)
   const chunks: Uint8Array[] = []
   let total = 0
-  for await (const chunk of node.fs.cat(cid, { signal })) {
+  for await (const chunk of node.fs.cat(cid, {
+    signal,
+    // Tell bitswap exactly who has the blocks — bypass flaky DHT findProviders
+    ...(providers.length > 0 ? { providers } : {}),
+  })) {
     chunks.push(chunk)
     total += chunk.length
   }
@@ -329,8 +359,12 @@ export async function fetchCidBytesFromGateways(
 
 /**
  * Load a CID into a blob object URL for <img>/<video>.
- * Uses local blockstore immediately when present; otherwise races Helia P2P
- * (bitswap) with HTTP gateways. Dials optional provider addrs first.
+ *
+ * Flow for followers:
+ * 1. Local blockstore (instant if already cached)
+ * 2. Dial publisher multiaddrs from the Nostr event, then bitswap with
+ *    those peers passed as `providers` (Helia otherwise only asks DHT)
+ * 3. Race HTTP gateways in parallel as a secondary path
  */
 export async function loadCidAsObjectUrl(
   node: HeliaNode,
@@ -350,6 +384,7 @@ export async function loadCidAsObjectUrl(
 
   const mimeType = opts.mimeType
   const timeoutMs = opts.timeoutMs ?? DEFAULT_LOAD_TIMEOUT_MS
+  const providerAddrs = opts.providerAddrs ?? []
   const cid = CID.parse(cidString)
   const signal = AbortSignal.timeout(timeoutMs)
 
@@ -376,11 +411,16 @@ export async function loadCidAsObjectUrl(
     // fall through to network race
   }
 
-  if (opts.providerAddrs?.length) {
-    void dialProviderAddrs(node, opts.providerAddrs, Math.min(6_000, timeoutMs))
+  // MUST dial before/while bitswap — fire-and-forget dial left sessions empty
+  if (providerAddrs.length > 0) {
+    await dialProviderAddrs(
+      node,
+      providerAddrs,
+      Math.min(DIAL_TIMEOUT_MS, timeoutMs),
+    )
   }
 
-  const heliaBytes = concatUnixFs(node, cid, signal)
+  const heliaBytes = concatUnixFs(node, cid, signal, providerAddrs)
   const gatewayBytes = fetchCidBytesFromGateways(cidString, signal)
 
   try {

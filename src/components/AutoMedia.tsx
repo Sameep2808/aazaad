@@ -22,6 +22,10 @@ export interface AutoMediaProps {
 /**
  * Image / video that autoplays only while in viewport focus and the tab is visible.
  * Videos start muted (browser policy); user can unmute.
+ *
+ * Media is loaded via Helia P2P (dialing publisher multiaddrs from the post)
+ * with HTTP gateway as a secondary race — not as the primary src (gateways
+ * never have browser-only content).
  */
 export const AutoMedia = forwardRef<AutoMediaHandle, AutoMediaProps>(
   function AutoMedia(
@@ -35,10 +39,10 @@ export const AutoMedia = forwardRef<AutoMediaHandle, AutoMediaProps>(
       root,
       minRatio: variant === 'reel' ? 0.65 : 0.5,
     })
-    const [src, setSrc] = useState(() =>
-      cidToGatewayUrl(post.cid, IPFS_GATEWAYS[0]),
-    )
+    const [src, setSrc] = useState<string | null>(null)
     const [localUrl, setLocalUrl] = useState<string | null>(null)
+    const [loading, setLoading] = useState(true)
+    const [loadError, setLoadError] = useState(false)
     const [muted, setMuted] = useState(true)
     const [playing, setPlaying] = useState(false)
 
@@ -55,27 +59,47 @@ export const AutoMedia = forwardRef<AutoMediaHandle, AutoMediaProps>(
       let revoked: string | null = null
       let cancelled = false
 
-      async function tryLocal() {
-        if (!helia || !ready || !post.cid) return
-        try {
-          const url = await loadCidAsObjectUrl(helia, post.cid, {
-            mimeType: post.mimeType,
-            providerAddrs: post.providerAddrs ?? [],
-            timeoutMs: 25_000,
-          })
-          if (cancelled) {
-            URL.revokeObjectURL(url)
-            return
-          }
-          revoked = url
-          setLocalUrl(url)
-          setSrc(url)
-        } catch {
-          // keep gateway src / onError rotation
+      async function loadMedia() {
+        if (!post.cid) {
+          setLoading(false)
+          setLoadError(true)
+          return
         }
+
+        setLoading(true)
+        setLoadError(false)
+        setSrc(null)
+        gatewayIndexRef.current = 0
+
+        if (helia && ready) {
+          try {
+            const url = await loadCidAsObjectUrl(helia, post.cid, {
+              mimeType: post.mimeType,
+              providerAddrs: post.providerAddrs ?? [],
+              timeoutMs: 45_000,
+            })
+            if (cancelled) {
+              URL.revokeObjectURL(url)
+              return
+            }
+            revoked = url
+            setLocalUrl(url)
+            setSrc(url)
+            setLoading(false)
+            setLoadError(false)
+            return
+          } catch {
+            // fall through to gateway attempt
+          }
+        }
+
+        if (cancelled) return
+        // Last resort: public gateways (only works if CID was pinned publicly)
+        setSrc(cidToGatewayUrl(post.cid, IPFS_GATEWAYS[0]))
+        setLoading(false)
       }
 
-      void tryLocal()
+      void loadMedia()
       return () => {
         cancelled = true
         if (revoked) URL.revokeObjectURL(revoked)
@@ -90,7 +114,7 @@ export const AutoMedia = forwardRef<AutoMediaHandle, AutoMediaProps>(
 
     useEffect(() => {
       const video = videoRef.current
-      if (!video || post.mediaType === 'image') return
+      if (!video || post.mediaType === 'image' || !src) return
 
       if (shouldPlay) {
         video.muted = muted
@@ -107,6 +131,10 @@ export const AutoMedia = forwardRef<AutoMediaHandle, AutoMediaProps>(
     }, [shouldPlay, muted, post.mediaType, src])
 
     function onError() {
+      if (!post.cid) {
+        setLoadError(true)
+        return
+      }
       if (localUrl && src === localUrl) {
         gatewayIndexRef.current = 0
         setSrc(cidToGatewayUrl(post.cid, IPFS_GATEWAYS[0]))
@@ -116,7 +144,9 @@ export const AutoMedia = forwardRef<AutoMediaHandle, AutoMediaProps>(
       if (next < IPFS_GATEWAYS.length) {
         gatewayIndexRef.current = next
         setSrc(cidToGatewayUrl(post.cid, IPFS_GATEWAYS[next]))
+        return
       }
+      setLoadError(true)
     }
 
     const isReel = variant === 'reel'
@@ -129,15 +159,37 @@ export const AutoMedia = forwardRef<AutoMediaHandle, AutoMediaProps>(
         ref={containerRef}
         className={['relative overflow-hidden bg-black', className].join(' ')}
       >
-        {post.mediaType === 'image' ? (
+        {loading && !src && (
+          <div
+            className={[
+              'flex items-center justify-center text-xs text-zinc-400',
+              isReel ? 'h-full min-h-[50vh]' : 'min-h-[12rem] py-16',
+            ].join(' ')}
+          >
+            Loading media…
+          </div>
+        )}
+        {loadError && !src && (
+          <div
+            className={[
+              'flex items-center justify-center px-4 text-center text-xs text-zinc-500',
+              isReel ? 'h-full min-h-[50vh]' : 'min-h-[12rem] py-16',
+            ].join(' ')}
+          >
+            Media unavailable — keep the poster’s Aazaad tab open so it can seed.
+          </div>
+        )}
+        {src && post.mediaType === 'image' ? (
           <img
             src={src}
             alt={post.caption || 'Post'}
             className={mediaClass}
             draggable={false}
             onError={onError}
+            onLoad={() => setLoadError(false)}
           />
-        ) : (
+        ) : null}
+        {src && post.mediaType !== 'image' ? (
           <>
             <video
               ref={videoRef}
@@ -176,7 +228,7 @@ export const AutoMedia = forwardRef<AutoMediaHandle, AutoMediaProps>(
               </div>
             )}
           </>
-        )}
+        ) : null}
       </div>
     )
   },

@@ -12,6 +12,7 @@ import {
 } from '../lib/posts'
 import { cachePostFromEvent } from '../lib/postCache'
 import { isImageFile, isVideoFile } from '../lib/media'
+import { getHeliaPeerId, provideCid } from '../lib/ipfs'
 
 type PostMode = 'media' | 'text'
 type Stage = 'pick' | 'uploading' | 'compose' | 'publishing' | 'done'
@@ -57,7 +58,12 @@ function StorageDisclaimer() {
 
 export function Upload() {
   const { pubkey, signEvent } = useAuth()
-  const { ready: heliaReady, error: heliaError, waitForMultiaddrs } = useHelia()
+  const {
+    helia,
+    ready: heliaReady,
+    error: heliaError,
+    waitForMultiaddrs,
+  } = useHelia()
   const { upload, uploading, error: uploadError } = useIPFSUpload()
 
   const [mode, setMode] = useState<PostMode>('media')
@@ -92,6 +98,8 @@ export function Upload() {
       const nextCid = await upload(selected)
       setCid(nextCid)
       setStage('compose')
+      // Prefetch relay/WebRTC addrs while user writes caption
+      void waitForMultiaddrs(20_000)
     } catch (err) {
       setStage('pick')
       setError(err instanceof Error ? err.message : 'Upload failed')
@@ -103,18 +111,27 @@ export function Upload() {
     setError(null)
     setStage('publishing')
     try {
-      // Best-effort dialable addrs — never block publishing on relay discovery
+      // Wait for circuit-relay / WebRTC so followers have something to dial
       let providerAddrs: string[] = []
       try {
-        providerAddrs = await waitForMultiaddrs(8_000)
+        providerAddrs = await waitForMultiaddrs(15_000)
       } catch {
         providerAddrs = []
       }
+
+      // Re-announce once dialable (DHT is best-effort; multiaddrs are the P2P path)
+      let peerId: string | null = null
+      if (helia) {
+        peerId = getHeliaPeerId(helia)
+        void provideCid(helia, cid)
+      }
+
       const template = buildMediaEventTemplate({
         file,
         cid,
         caption: caption.trim(),
         providerAddrs,
+        peerId,
       })
       const signed = await signEvent(template)
       await cachePostFromEvent(signed)

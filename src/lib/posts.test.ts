@@ -22,6 +22,7 @@ describe('posts / feed algorithm', () => {
       cid: 'bafyvideo',
       caption: 'hello reel',
       providerAddrs: ['/dns4/relay.example/tcp/443/wss/p2p-circuit/p2p/12D3'],
+      peerId: '12D3KooWPeer',
     })
     expect(vEvent.kind).toBe(22)
     expect(vEvent.content).toContain('hello reel')
@@ -31,6 +32,9 @@ describe('posts / feed algorithm', () => {
         (t) => t[0] === 'multiaddr' && t[1]?.includes('p2p-circuit'),
       ),
     ).toBe(true)
+    expect(vEvent.tags.some((t) => t[0] === 'p2p' && t[1] === '12D3KooWPeer')).toBe(
+      true,
+    )
 
     const iEvent = buildMediaEventTemplate({
       file: image,

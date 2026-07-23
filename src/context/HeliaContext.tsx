@@ -57,7 +57,7 @@ export function HeliaProvider({ children }: { children: ReactNode }) {
         setReady(true)
 
         // Re-announce local pins so followers can find us after reload
-        void waitForDialableAddrs(node, 10_000).then(async (addrs) => {
+        void waitForDialableAddrs(node, 20_000).then(async (addrs) => {
           if (cancelled) return
           setMultiaddrs(addrs)
           await reprovideLocalPins(node!)
@@ -95,7 +95,7 @@ export function HeliaProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const waitForMultiaddrs = useCallback(
-    async (timeoutMs = 8_000) => {
+    async (timeoutMs = 15_000) => {
       if (!helia) return []
       const addrs = await waitForDialableAddrs(helia, timeoutMs)
       setMultiaddrs(addrs)

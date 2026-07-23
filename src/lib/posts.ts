@@ -83,8 +83,10 @@ export function buildMediaEventTemplate(opts: {
   caption: string
   /** Dialable Helia multiaddrs so followers can fetch media P2P */
   providerAddrs?: string[]
+  /** Publisher libp2p peer id */
+  peerId?: string | null
 }): EventTemplate {
-  const { file, cid, caption, providerAddrs = [] } = opts
+  const { file, cid, caption, providerAddrs = [], peerId } = opts
   const gateway = cidToGatewayUrl(cid)
   const ipfsUri = `ipfs://${cid}`
   const isVideo = isVideoFile(file)
@@ -99,8 +101,12 @@ export function buildMediaEventTemplate(opts: {
 
   const addrTags = providerAddrs
     .filter(Boolean)
-    .slice(0, 6)
+    .slice(0, 8)
     .map((addr) => ['multiaddr', addr] as [string, string])
+
+  const peerTags: Array<[string, string]> = peerId
+    ? [['p2p', peerId]]
+    : []
 
   if (isVideo) {
     return {
@@ -113,6 +119,7 @@ export function buildMediaEventTemplate(opts: {
         ['m', mime],
         ['title', caption || 'aazaad'],
         ['x', cid],
+        ...peerTags,
         ...addrTags,
         ['t', 'aazaad'],
         ['client', 'aazaad'],
@@ -130,6 +137,7 @@ export function buildMediaEventTemplate(opts: {
       ['url', gateway],
       ['m', mime],
       ['x', cid],
+      ...peerTags,
       ...addrTags,
       ['t', 'aazaad'],
       ['client', 'aazaad'],
