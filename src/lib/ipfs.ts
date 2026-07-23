@@ -132,3 +132,43 @@ export async function loadCidAsObjectUrl(
   const blob = new Blob([bytes], { type })
   return URL.createObjectURL(blob)
 }
+
+/** Process-wide avatar blob URLs — avoid re-reading IPFS on every avatar remount. */
+const avatarObjectUrls = new Map<string, string>()
+const avatarObjectUrlInflight = new Map<string, Promise<string>>()
+
+export async function loadAvatarObjectUrl(
+  node: HeliaNode,
+  cidString: string,
+  mimeType: string = 'image/jpeg',
+): Promise<string> {
+  const cached = avatarObjectUrls.get(cidString)
+  if (cached) return cached
+
+  const inflight = avatarObjectUrlInflight.get(cidString)
+  if (inflight) return inflight
+
+  const pending = loadCidAsObjectUrl(node, cidString, mimeType)
+    .then((url) => {
+      avatarObjectUrls.set(cidString, url)
+      avatarObjectUrlInflight.delete(cidString)
+      return url
+    })
+    .catch((err) => {
+      avatarObjectUrlInflight.delete(cidString)
+      throw err
+    })
+
+  avatarObjectUrlInflight.set(cidString, pending)
+  return pending
+}
+
+/** Test helper */
+export function clearAvatarObjectUrlCache(): void {
+  for (const url of avatarObjectUrls.values()) {
+    URL.revokeObjectURL(url)
+  }
+  avatarObjectUrls.clear()
+  avatarObjectUrlInflight.clear()
+}
+

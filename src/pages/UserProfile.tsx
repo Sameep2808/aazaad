@@ -15,51 +15,8 @@ import {
   type ResolvedProfile,
 } from '../lib/profiles'
 import { UserAvatar } from '../components/UserAvatar'
+import { PersonList } from '../components/PersonList'
 import { ProfilePostsGrid } from '../components/ProfilePostsGrid'
-import type { ProfilePerson } from '../hooks/useProfileStats'
-import { profilePath } from '../lib/userSearch'
-
-function PersonList({
-  title,
-  people,
-  empty,
-}: {
-  title: string
-  people: ProfilePerson[]
-  empty: string
-}) {
-  return (
-    <div className="space-y-2">
-      <h3 className="text-sm font-semibold text-zinc-200">{title}</h3>
-      {people.length === 0 ? (
-        <p className="text-sm text-zinc-500">{empty}</p>
-      ) : (
-        <ul className="max-h-56 space-y-2 overflow-y-auto">
-          {people.map((person) => (
-            <li key={person.pubkey}>
-              <Link
-                to={profilePath(person.pubkey)}
-                className="flex items-center gap-3 rounded-lg border border-zinc-800 px-3 py-2 hover:bg-zinc-900/80"
-              >
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-zinc-800 text-xs font-semibold uppercase text-zinc-300">
-                  {(person.username ?? person.pubkey).slice(0, 2)}
-                </div>
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium text-zinc-100">
-                    {person.username ? `@${person.username}` : 'Unknown'}
-                  </p>
-                  <p className="truncate font-mono text-[10px] text-zinc-500">
-                    {person.pubkey.slice(0, 16)}…
-                  </p>
-                </div>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
-}
 
 export function UserProfile() {
   const { id = '' } = useParams<{ id: string }>()
@@ -94,7 +51,7 @@ export function UserProfile() {
       const cached = await getCachedProfile(targetPubkey)
       if (!cancelled && cached) setProfile(cached)
       try {
-        const fresh = await fetchAndCacheProfile(targetPubkey)
+        const fresh = await fetchAndCacheProfile(targetPubkey, { force: true })
         if (!cancelled) setProfile(fresh)
       } catch {
         // keep cache

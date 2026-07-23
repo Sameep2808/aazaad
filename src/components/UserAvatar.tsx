@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useHelia } from '../context/HeliaContext'
-import { loadCidAsObjectUrl } from '../lib/ipfs'
+import { loadAvatarObjectUrl } from '../lib/ipfs'
 import { IPFS_GATEWAYS, cidToGatewayUrl } from '../lib/media'
 import {
   displayHandle,
@@ -38,22 +38,17 @@ export function UserAvatar({
   }, [profile?.pictureUrl, profile?.pictureCid, profile?.pubkey])
 
   useEffect(() => {
-    let revoked: string | null = null
     let cancelled = false
 
     async function tryLocal() {
       if (!profile?.pictureCid || !helia || !ready) return
       try {
-        const url = await loadCidAsObjectUrl(
+        const url = await loadAvatarObjectUrl(
           helia,
           profile.pictureCid,
           'image/jpeg',
         )
-        if (cancelled) {
-          URL.revokeObjectURL(url)
-          return
-        }
-        revoked = url
+        if (cancelled) return
         setSrc(url)
         setFailed(false)
       } catch {
@@ -64,7 +59,7 @@ export function UserAvatar({
     void tryLocal()
     return () => {
       cancelled = true
-      if (revoked) URL.revokeObjectURL(revoked)
+      // Shared avatar URLs are kept in the process cache (not revoked on unmount).
     }
   }, [helia, ready, profile?.pictureCid])
 

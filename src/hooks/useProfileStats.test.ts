@@ -24,6 +24,26 @@ vi.mock('../lib/posts', async (importOriginal) => {
   }
 })
 
+vi.mock('../lib/profiles', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/profiles')>()
+  return {
+    ...actual,
+    fetchAndCacheProfiles: vi.fn(async (pubkeys: string[]) => {
+      const map = new Map()
+      for (const pubkey of pubkeys) {
+        map.set(pubkey, {
+          pubkey,
+          username: pubkey === alice ? 'alice' : null,
+          displayName: pubkey === alice ? 'alice' : null,
+          pictureUrl: null,
+          pictureCid: null,
+        })
+      }
+      return map
+    }),
+  }
+})
+
 import {
   fetchContactListEvents,
   fetchFollowerCandidateEvents,
@@ -93,5 +113,8 @@ describe('useProfileStats', () => {
       expect(result.current.followersCount).toBe(1)
       expect(result.current.postsCount).toBe(2)
     })
+
+    expect(result.current.following[0]?.username).toBe('alice')
+    expect(result.current.followers[0]?.pubkey).toBe(alice)
   })
 })

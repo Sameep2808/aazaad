@@ -8,15 +8,15 @@ import {
 } from '../lib/nostr'
 import { fetchAuthorMediaEvents } from '../lib/posts'
 import { db } from '../lib/db'
-import { getAccountByPubkey } from '../lib/accounts'
 import { loadCachedPostsByAuthor } from '../lib/postCache'
 import { FOLLOWS_CHANGED_EVENT } from '../lib/follows'
-import { getCachedProfile } from '../lib/profiles'
+import {
+  fetchAndCacheProfiles,
+  type ResolvedProfile,
+} from '../lib/profiles'
 
-export interface ProfilePerson {
-  pubkey: string
-  username: string | null
-}
+/** Person in a followers / following list (shared profile cache). */
+export type ProfilePerson = ResolvedProfile
 
 export interface UseProfileStatsResult {
   following: ProfilePerson[]
@@ -30,15 +30,17 @@ export interface UseProfileStatsResult {
 }
 
 async function resolvePeople(pubkeys: string[]): Promise<ProfilePerson[]> {
-  return Promise.all(
-    pubkeys.map(async (pubkey) => {
-      const local = await getAccountByPubkey(pubkey)
-      if (local?.username) {
-        return { pubkey, username: local.username }
-      }
-      const profile = await getCachedProfile(pubkey)
-      return { pubkey, username: profile?.username ?? null }
-    }),
+  if (pubkeys.length === 0) return []
+  const map = await fetchAndCacheProfiles(pubkeys)
+  return pubkeys.map(
+    (pubkey) =>
+      map.get(pubkey) ?? {
+        pubkey,
+        username: null,
+        displayName: null,
+        pictureUrl: null,
+        pictureCid: null,
+      },
   )
 }
 

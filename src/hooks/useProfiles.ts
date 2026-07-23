@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   fetchAndCacheProfiles,
+  isProfileFresh,
+  peekProfiles,
+  subscribeProfiles,
   type ResolvedProfile,
 } from '../lib/profiles'
 
 /**
- * Resolve usernames + profile photos for a set of pubkeys (batch Kind 0).
+ * Resolve usernames + profile photos for a set of pubkeys.
+ * Uses a shared in-memory cache (backed by IndexedDB) so navigating
+ * between pages does not re-fetch or flash-reload known profiles.
  */
 export function useProfiles(pubkeys: string[]): {
   profiles: Map<string, ResolvedProfile>
@@ -19,17 +24,31 @@ export function useProfiles(pubkeys: string[]): {
   )
   const list = useMemo(() => (key ? key.split(',') : []), [key])
 
-  const [profiles, setProfiles] = useState<Map<string, ResolvedProfile>>(
-    () => new Map(),
+  const [profiles, setProfiles] = useState<Map<string, ResolvedProfile>>(() =>
+    peekProfiles(list),
   )
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(
+    () => list.length > 0 && list.some((pk) => !isProfileFresh(pk)),
+  )
+
+  // Keep React state in sync when another screen updates a profile
+  useEffect(() => {
+    setProfiles(peekProfiles(list))
+    return subscribeProfiles(() => {
+      setProfiles(peekProfiles(list))
+    })
+  }, [list])
 
   const refresh = useCallback(async () => {
     if (list.length === 0) {
       setProfiles(new Map())
+      setLoading(false)
       return
     }
-    setLoading(true)
+    // Paint anything we already know before network/IDB work
+    setProfiles(peekProfiles(list))
+    const needsFetch = list.some((pk) => !isProfileFresh(pk))
+    if (needsFetch) setLoading(true)
     try {
       const map = await fetchAndCacheProfiles(list)
       setProfiles(map)
@@ -43,7 +62,7 @@ export function useProfiles(pubkeys: string[]): {
   }, [refresh])
 
   const get = useCallback(
-    (pubkey: string) => profiles.get(pubkey),
+    (pubkey: string) => profiles.get(pubkey) ?? peekProfiles([pubkey]).get(pubkey),
     [profiles],
   )
 
