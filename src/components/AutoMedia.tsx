@@ -56,9 +56,13 @@ export const AutoMedia = forwardRef<AutoMediaHandle, AutoMediaProps>(
       let cancelled = false
 
       async function tryLocal() {
-        if (!helia || !ready) return
+        if (!helia || !ready || !post.cid) return
         try {
-          const url = await loadCidAsObjectUrl(helia, post.cid, post.mimeType)
+          const url = await loadCidAsObjectUrl(helia, post.cid, {
+            mimeType: post.mimeType,
+            providerAddrs: post.providerAddrs ?? [],
+            timeoutMs: 25_000,
+          })
           if (cancelled) {
             URL.revokeObjectURL(url)
             return
@@ -67,7 +71,7 @@ export const AutoMedia = forwardRef<AutoMediaHandle, AutoMediaProps>(
           setLocalUrl(url)
           setSrc(url)
         } catch {
-          // gateway fallback
+          // keep gateway src / onError rotation
         }
       }
 
@@ -76,7 +80,13 @@ export const AutoMedia = forwardRef<AutoMediaHandle, AutoMediaProps>(
         cancelled = true
         if (revoked) URL.revokeObjectURL(revoked)
       }
-    }, [helia, ready, post.cid, post.mimeType])
+    }, [
+      helia,
+      ready,
+      post.cid,
+      post.mimeType,
+      (post.providerAddrs ?? []).join('\0'),
+    ])
 
     useEffect(() => {
       const video = videoRef.current

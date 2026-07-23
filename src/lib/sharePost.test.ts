@@ -12,6 +12,7 @@ function fakePost(partial: Partial<FeedPost> = {}): FeedPost {
     mediaType: 'text',
     mimeType: 'text/plain',
     gatewayUrl: '',
+      providerAddrs: [],
     likes: 0,
     comments: 0,
     score: 0,

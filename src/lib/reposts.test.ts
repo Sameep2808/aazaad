@@ -64,6 +64,7 @@ describe('reposts', () => {
       mediaType: 'video',
       mimeType: 'video/mp4',
       gatewayUrl: '',
+      providerAddrs: [],
       likes: 0,
       comments: 0,
       score: 0,

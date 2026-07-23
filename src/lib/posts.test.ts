@@ -21,10 +21,16 @@ describe('posts / feed algorithm', () => {
       file: video,
       cid: 'bafyvideo',
       caption: 'hello reel',
+      providerAddrs: ['/dns4/relay.example/tcp/443/wss/p2p-circuit/p2p/12D3'],
     })
     expect(vEvent.kind).toBe(22)
     expect(vEvent.content).toContain('hello reel')
     expect(vEvent.tags.some((t) => t[0] === 'x' && t[1] === 'bafyvideo')).toBe(true)
+    expect(
+      vEvent.tags.some(
+        (t) => t[0] === 'multiaddr' && t[1]?.includes('p2p-circuit'),
+      ),
+    ).toBe(true)
 
     const iEvent = buildMediaEventTemplate({
       file: image,
@@ -45,6 +51,7 @@ describe('posts / feed algorithm', () => {
       tags: [
         ['imeta', 'url ipfs://bafycid123', 'm video/mp4'],
         ['x', 'bafycid123'],
+        ['multiaddr', '/ip4/1.2.3.4/tcp/4001/p2p/12D3Koo'],
       ],
       sig: '2'.repeat(128),
     } as Event
@@ -53,6 +60,7 @@ describe('posts / feed algorithm', () => {
     expect(post?.cid).toBe('bafycid123')
     expect(post?.mediaType).toBe('video')
     expect(post?.caption).toBe('my reel')
+    expect(post?.providerAddrs).toEqual(['/ip4/1.2.3.4/tcp/4001/p2p/12D3Koo'])
   })
 
   it('scores posts with likes*2 + comments / hours^1.5', () => {
@@ -70,6 +78,7 @@ describe('posts / feed algorithm', () => {
       mediaType: 'video' as const,
       mimeType: 'video/mp4',
       gatewayUrl: '',
+      providerAddrs: [],
       score: 0,
       raw: {} as Event,
     }

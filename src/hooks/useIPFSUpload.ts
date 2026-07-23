@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react'
 import { useHelia } from '../context/HeliaContext'
 import { uploadFileToIPFS } from '../lib/ipfs'
+import { db } from '../lib/db'
 
 export interface UseIPFSUploadResult {
   upload: (file: File) => Promise<string>
@@ -12,6 +13,7 @@ export interface UseIPFSUploadResult {
 
 /**
  * Upload a File through Helia UnixFS and return the CID string.
+ * Pins + announces the CID so other peers can discover this seeder.
  */
 export function useIPFSUpload(): UseIPFSUploadResult {
   const { helia, ready } = useHelia()
@@ -31,6 +33,8 @@ export function useIPFSUpload(): UseIPFSUploadResult {
       try {
         setProgress('adding')
         const cid = await uploadFileToIPFS(helia, file)
+        // Track as a seed so boot re-provide covers own uploads
+        await db.seeds.put({ cid, pinnedAt: Date.now() })
         setLastCid(cid)
         setProgress('done')
         return cid

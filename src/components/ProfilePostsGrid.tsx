@@ -42,7 +42,11 @@ function GridThumb({
       if (post.mediaType === 'text' || !post.cid) return
       if (helia && ready) {
         try {
-          const url = await loadCidAsObjectUrl(helia, post.cid, post.mimeType)
+          const url = await loadCidAsObjectUrl(helia, post.cid, {
+            mimeType: post.mimeType,
+            providerAddrs: post.providerAddrs ?? [],
+            timeoutMs: 20_000,
+          })
           if (cancelled) {
             URL.revokeObjectURL(url)
             return
@@ -62,7 +66,14 @@ function GridThumb({
       cancelled = true
       if (revoked) URL.revokeObjectURL(revoked)
     }
-  }, [helia, ready, post.cid, post.mimeType, post.mediaType])
+  }, [
+    helia,
+    ready,
+    post.cid,
+    post.mimeType,
+    post.mediaType,
+    (post.providerAddrs ?? []).join('\0'),
+  ])
 
   if (post.mediaType === 'text') {
     return (

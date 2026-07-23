@@ -40,6 +40,11 @@ export interface FeedPost {
   mediaType: 'text' | 'image' | 'video' | 'unknown'
   mimeType: string | null
   gatewayUrl: string
+  /**
+   * Publisher Helia multiaddrs (circuit / WebRTC) so followers can dial
+   * the seeder peer-to-peer without waiting on DHT alone.
+   */
+  providerAddrs: string[]
   likes: number
   comments: number
   score: number
@@ -76,8 +81,10 @@ export function buildMediaEventTemplate(opts: {
   file: File
   cid: string
   caption: string
+  /** Dialable Helia multiaddrs so followers can fetch media P2P */
+  providerAddrs?: string[]
 }): EventTemplate {
-  const { file, cid, caption } = opts
+  const { file, cid, caption, providerAddrs = [] } = opts
   const gateway = cidToGatewayUrl(cid)
   const ipfsUri = `ipfs://${cid}`
   const isVideo = isVideoFile(file)
@@ -90,6 +97,11 @@ export function buildMediaEventTemplate(opts: {
     `alt ${caption || file.name}`,
   ]
 
+  const addrTags = providerAddrs
+    .filter(Boolean)
+    .slice(0, 6)
+    .map((addr) => ['multiaddr', addr] as [string, string])
+
   if (isVideo) {
     return {
       kind: 22,
@@ -101,6 +113,7 @@ export function buildMediaEventTemplate(opts: {
         ['m', mime],
         ['title', caption || 'aazaad'],
         ['x', cid],
+        ...addrTags,
         ['t', 'aazaad'],
         ['client', 'aazaad'],
       ],
@@ -117,6 +130,7 @@ export function buildMediaEventTemplate(opts: {
       ['url', gateway],
       ['m', mime],
       ['x', cid],
+      ...addrTags,
       ['t', 'aazaad'],
       ['client', 'aazaad'],
     ],
@@ -333,10 +347,12 @@ function mediaTypeFromMime(
 export function parseFeedPost(event: Event): FeedPost | null {
   let cid: string | null = extractCid(event.content)
   let mime: string | null = null
+  const providerAddrs: string[] = []
 
   for (const tag of event.tags) {
     if (tag[0] === 'x' && tag[1] && !cid) cid = tag[1]
     if (tag[0] === 'm' && tag[1]) mime = tag[1]
+    if (tag[0] === 'multiaddr' && tag[1]) providerAddrs.push(tag[1])
     if (tag[0] === 'imeta') {
       for (const part of tag.slice(1)) {
         if (part.startsWith('url ')) {
@@ -361,6 +377,7 @@ export function parseFeedPost(event: Event): FeedPost | null {
       mediaType: 'text',
       mimeType: 'text/plain',
       gatewayUrl: '',
+      providerAddrs: [],
       likes: 0,
       comments: 0,
       score: 0,
@@ -397,6 +414,7 @@ export function parseFeedPost(event: Event): FeedPost | null {
           : mediaType,
     mimeType: mime,
     gatewayUrl: cidToGatewayUrl(cid, IPFS_GATEWAYS[0]),
+    providerAddrs: [...new Set(providerAddrs)].slice(0, 6),
     likes: 0,
     comments: 0,
     score: 0,

@@ -17,8 +17,12 @@ describe('media helpers', () => {
   })
 
   it('builds gateway URLs', () => {
-    expect(cidToGatewayUrl('bafy1')).toBe('https://ipfs.io/ipfs/bafy1')
-    expect(cidToGatewayUrl('ipfs://bafy1')).toBe('https://ipfs.io/ipfs/bafy1')
+    expect(cidToGatewayUrl('bafy1')).toBe(
+      'https://trustless-gateway.link/ipfs/bafy1',
+    )
+    expect(cidToGatewayUrl('ipfs://bafy1')).toBe(
+      'https://trustless-gateway.link/ipfs/bafy1',
+    )
   })
 
   it('detects image and video files', () => {

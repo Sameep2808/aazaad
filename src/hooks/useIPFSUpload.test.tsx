@@ -15,6 +15,9 @@ vi.mock('../lib/ipfs', async (importOriginal) => {
     uploadFileToIPFS: vi.fn(),
     seedCid: vi.fn(),
     unseedCid: vi.fn(),
+    waitForDialableAddrs: vi.fn().mockResolvedValue([]),
+    reprovideLocalPins: vi.fn().mockResolvedValue(0),
+    getPeerMultiaddrs: vi.fn().mockReturnValue([]),
   }
 })
 

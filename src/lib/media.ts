@@ -130,9 +130,10 @@ export function isSupportedMediaFile(file: File): boolean {
 
 /** Build a gateway URL for a CID (HTTP fallback while Helia resolves). */
 export const IPFS_GATEWAYS = [
+  'https://trustless-gateway.link/ipfs/',
   'https://ipfs.io/ipfs/',
   'https://w3s.link/ipfs/',
-  'https://cloudflare-ipfs.com/ipfs/',
+  'https://4everland.io/ipfs/',
 ] as const
 
 export function cidToGatewayUrl(cid: string, gateway: string = IPFS_GATEWAYS[0]): string {

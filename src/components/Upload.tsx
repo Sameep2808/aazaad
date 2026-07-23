@@ -57,7 +57,7 @@ function StorageDisclaimer() {
 
 export function Upload() {
   const { pubkey, signEvent } = useAuth()
-  const { ready: heliaReady, error: heliaError } = useHelia()
+  const { ready: heliaReady, error: heliaError, waitForMultiaddrs } = useHelia()
   const { upload, uploading, error: uploadError } = useIPFSUpload()
 
   const [mode, setMode] = useState<PostMode>('media')
@@ -103,10 +103,13 @@ export function Upload() {
     setError(null)
     setStage('publishing')
     try {
+      // Wait for circuit-relay / WebRTC addrs so followers can dial this seeder
+      const providerAddrs = await waitForMultiaddrs(8_000)
       const template = buildMediaEventTemplate({
         file,
         cid,
         caption: caption.trim(),
+        providerAddrs,
       })
       const signed = await signEvent(template)
       await cachePostFromEvent(signed)

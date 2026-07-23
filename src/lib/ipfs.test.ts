@@ -5,6 +5,8 @@ import {
   seedCid,
   unseedCid,
   parseCid,
+  provideCid,
+  loadCidAsObjectUrl,
 } from './ipfs'
 
 describe('ipfs layer', () => {
@@ -20,6 +22,7 @@ describe('ipfs layer', () => {
     expect(node.fs).toBeDefined()
     expect(node.pins).toBeDefined()
     expect(node.blockstore).toBeDefined()
+    expect(node.routing).toBeDefined()
   })
 
   it('uploads a File and returns a valid CID', async () => {
@@ -48,6 +51,29 @@ describe('ipfs layer', () => {
       offset += chunk.length
     }
     expect(Array.from(restored)).toEqual([1, 2, 3, 4, 5])
+  })
+
+  it('loads local CID as object URL without hanging', async () => {
+    const node = await createHeliaNode({ idbName: `load-${Date.now()}` })
+    nodes.push(node)
+    const file = new File([new TextEncoder().encode('hello-aazaad')], 't.txt', {
+      type: 'text/plain',
+    })
+    const cid = await uploadFileToIPFS(node, file)
+    const url = await loadCidAsObjectUrl(node, cid, {
+      mimeType: 'text/plain',
+      timeoutMs: 5_000,
+    })
+    expect(url).toMatch(/^blob:/)
+    URL.revokeObjectURL(url)
+  })
+
+  it('provideCid does not throw for a local pin', async () => {
+    const node = await createHeliaNode({ idbName: `provide-${Date.now()}` })
+    nodes.push(node)
+    const file = new File([new TextEncoder().encode('provide-me')], 'p.txt')
+    const cid = await uploadFileToIPFS(node, file)
+    await expect(provideCid(node, cid)).resolves.toBeUndefined()
   })
 
   it('seeds a CID into a second node via pin + cat', async () => {
