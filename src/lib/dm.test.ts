@@ -98,4 +98,46 @@ describe('dm helpers', () => {
     })
     expect(indexed).toBeNull()
   })
+
+  it('resolves peers case-insensitively (relays are case-sensitive)', () => {
+    const event = finalizeEvent(
+      buildEncryptedDmEvent(bob, 'cipher'),
+      aliceSk,
+    )
+    expect(peerFromDmEvent(event, alice.toUpperCase())).toBe(bob)
+    expect(peerFromDmEvent(event, alice)).toBe(bob)
+  })
+
+  it('indexes outbound then inbound for a two-way chat', async () => {
+    const hello = 'hey bob'
+    const cipherOut = nip04.encrypt(aliceSk, bob, hello)
+    const outEvent = finalizeEvent(
+      buildEncryptedDmEvent(bob, cipherOut),
+      aliceSk,
+    )
+    await cacheAndIndexDm({
+      ownerPubkey: alice,
+      event: outEvent,
+      plaintext: hello,
+      following: [],
+    })
+
+    const reply = 'hey alice'
+    const cipherIn = nip04.encrypt(bobSk, alice, reply)
+    const inEvent = finalizeEvent(
+      buildEncryptedDmEvent(alice, cipherIn),
+      bobSk,
+    )
+    await cacheAndIndexDm({
+      ownerPubkey: alice,
+      event: inEvent,
+      plaintext: reply,
+      following: [],
+    })
+
+    const { loadMessages } = await import('./dm')
+    const messages = await loadMessages(alice, bob)
+    expect(messages.map((m) => m.content)).toEqual([hello, reply])
+    expect(messages.map((m) => m.direction)).toEqual(['out', 'in'])
+  })
 })

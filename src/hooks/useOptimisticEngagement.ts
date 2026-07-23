@@ -153,13 +153,13 @@ export function useOptimisticEngagement(
 
 
   const comment = useCallback(
-    async (text: string) => {
+    async (text: string): Promise<Event | null> => {
       if (!pubkey) {
         setError('Log in to comment')
-        return false
+        return null
       }
       const trimmed = text.trim()
-      if (!trimmed) return false
+      if (!trimmed) return null
 
       setError(null)
       setBusy(true)
@@ -170,7 +170,7 @@ export function useOptimisticEngagement(
       try {
         const signed = await signEvent(buildCommentEvent(post.raw, trimmed))
         void publishEvent(signed)
-        return true
+        return signed
       } catch (err) {
         setComments((n) => {
           const rolled = Math.max(0, n - 1)
@@ -178,7 +178,7 @@ export function useOptimisticEngagement(
           return rolled
         })
         setError(err instanceof Error ? err.message : 'Comment failed')
-        return false
+        return null
       } finally {
         setBusy(false)
       }

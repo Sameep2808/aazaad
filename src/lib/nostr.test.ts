@@ -9,6 +9,8 @@ import {
   decodeNsec,
   pubkeyFromSecretKey,
   destroyPool,
+  normalizePubkey,
+  decodePubkey,
 } from './nostr'
 import type { Event } from 'nostr-tools'
 
@@ -23,6 +25,13 @@ describe('nostr layer', () => {
     expect(id.npub.startsWith('npub1')).toBe(true)
     expect(hexToNpub(id.pubkey)).toBe(id.npub)
     expect(pubkeyFromSecretKey(id.secretKey)).toBe(id.pubkey)
+  })
+
+  it('normalizes pubkeys to lowercase for relay queries', () => {
+    const id = createEphemeralIdentity()
+    expect(normalizePubkey(id.pubkey.toUpperCase())).toBe(id.pubkey)
+    expect(decodePubkey(id.pubkey.toUpperCase())).toBe(id.pubkey)
+    expect(decodePubkey(id.npub)).toBe(id.pubkey)
   })
 
   it('round-trips secret key hex encoding', () => {

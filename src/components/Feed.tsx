@@ -14,6 +14,10 @@ import { blockUser } from '../lib/blocks'
 import { deleteOwnPost } from '../lib/deletions'
 import { db } from '../lib/db'
 import {
+  notifyFollowsChanged,
+  syncProfileStatsFollowing,
+} from '../lib/follows'
+import {
   buildContactListEvent,
   publishEvent,
 } from '../lib/nostr'
@@ -25,6 +29,7 @@ import { AutoMedia, type AutoMediaHandle } from './AutoMedia'
 import { DoubleTapLikeLayer } from './DoubleTapLikeLayer'
 import { PostAuthorBar } from './UserAvatar'
 import { ShareSheet } from './ShareSheet'
+import { CommentsSheet } from './CommentsSheet'
 
 interface FeedProps {
   posts: FeedPost[]
@@ -77,13 +82,12 @@ export function PostCard({
   const { toggleRepost, busyId, error: repostError, isReposted, hydrate } =
     useRepost()
   const mediaRef = useRef<AutoMediaHandle>(null)
-  const [commentText, setCommentText] = useState('')
-  const [showComment, setShowComment] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [blocking, setBlocking] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
+  const [commentsOpen, setCommentsOpen] = useState(false)
 
   const isOwnPost = Boolean(pubkey && post.pubkey === pubkey && !post.repost)
   const canBlockAuthor = Boolean(pubkey && post.pubkey !== pubkey)
@@ -171,6 +175,8 @@ export function PostCard({
           following: list,
           updatedAt: Date.now(),
         })
+        await syncProfileStatsFollowing(pubkey, list)
+        notifyFollowsChanged(pubkey)
         void publishEvent(signed)
       }
       await blockUser(pubkey, post.pubkey)
@@ -291,7 +297,7 @@ export function PostCard({
           </button>
           <button
             type="button"
-            onClick={() => setShowComment((v) => !v)}
+            onClick={() => setCommentsOpen(true)}
             className="flex min-h-11 min-w-11 touch-manipulation items-center gap-1.5 px-2 text-sm text-zinc-200 active:opacity-70"
           >
             <MessageCircle className="h-6 w-6" />
@@ -369,32 +375,6 @@ export function PostCard({
           </p>
         )}
 
-        {showComment && (
-          <div className="flex gap-2">
-            <input
-              value={commentText}
-              onChange={(e) => setCommentText(e.target.value)}
-              placeholder="Add a comment…"
-              className="min-h-11 flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none"
-            />
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => {
-                void comment(commentText).then((ok) => {
-                  if (ok) {
-                    setCommentText('')
-                    setShowComment(false)
-                  }
-                })
-              }}
-              className="min-h-11 touch-manipulation rounded-lg bg-white px-3 py-2 text-xs font-semibold text-zinc-900"
-            >
-              Post
-            </button>
-          </div>
-        )}
-
         {msg && <p className="text-xs text-zinc-400">{msg}</p>}
       </div>
 
@@ -405,6 +385,14 @@ export function PostCard({
         onShared={(count) =>
           setMsg(count === 1 ? 'Sent to 1 person' : `Sent to ${count} people`)
         }
+      />
+      <CommentsSheet
+        post={post}
+        open={commentsOpen}
+        onClose={() => setCommentsOpen(false)}
+        busy={busy}
+        error={error}
+        onSubmit={comment}
       />
     </article>
   )

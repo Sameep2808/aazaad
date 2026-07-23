@@ -3,8 +3,9 @@ import {
   buildEncryptedDmEvent,
   cacheAndIndexDm,
   isBlocked,
-  publishEvent,
+  notifyDmUpdated,
 } from './dm'
+import { DM_RELAYS, normalizePubkey, publishEventRace } from './nostr'
 
 export async function sendEncryptedDm(opts: {
   ownerPubkey: string
@@ -13,21 +14,32 @@ export async function sendEncryptedDm(opts: {
   following: string[]
   encryptDm: (peerPubkey: string, plaintext: string) => Promise<string>
   signEvent: (template: EventTemplate) => Promise<Event>
-}): Promise<void> {
-  const peer = opts.peerPubkey.toLowerCase()
+}): Promise<Event> {
+  const owner = normalizePubkey(opts.ownerPubkey)
+  const peer = normalizePubkey(opts.peerPubkey)
   const trimmed = opts.plaintext.trim()
   if (!trimmed) throw new Error('Message is empty')
-  if (await isBlocked(opts.ownerPubkey, peer)) {
+  if (await isBlocked(owner, peer)) {
     throw new Error('You blocked this user')
   }
 
   const ciphertext = await opts.encryptDm(peer, trimmed)
   const signed = await opts.signEvent(buildEncryptedDmEvent(peer, ciphertext))
+
+  // First relay acceptance is enough for a fast chat feel.
+  try {
+    await publishEventRace(signed, DM_RELAYS, 5000)
+  } catch {
+    throw new Error('Could not deliver message — check your connection and try again')
+  }
+
   await cacheAndIndexDm({
-    ownerPubkey: opts.ownerPubkey,
+    ownerPubkey: owner,
     event: signed,
     plaintext: trimmed,
     following: opts.following,
   })
-  void publishEvent(signed)
+  notifyDmUpdated({ peer, messageId: signed.id })
+
+  return signed
 }

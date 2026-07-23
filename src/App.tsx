@@ -17,6 +17,7 @@ function App() {
   const isExplore = location.pathname === '/explore'
   const isUserProfile = location.pathname.startsWith('/u/')
   const isMessages = location.pathname.startsWith('/messages')
+  const isChatThread = /^\/messages\/[^/]+/.test(location.pathname)
   const isPostDetail = location.pathname.startsWith('/p/')
   const showAppHeader =
     !isReels && !isExplore && !isUserProfile && !isMessages && !isPostDetail
@@ -34,16 +35,19 @@ function App() {
         className={[
           'flex min-h-0 flex-1 flex-col',
           isReels || isMessages
-            ? 'overflow-hidden pb-14'
-            : 'scroll-touch overflow-y-auto overscroll-y-contain pb-16',
+            ? 'overflow-hidden'
+            : 'scroll-touch overflow-y-auto overscroll-y-contain',
+          isChatThread ? 'pb-0' : isReels || isMessages ? 'pb-14' : 'pb-16',
         ].join(' ')}
         style={
-          isReels || isMessages
-            ? { paddingBottom: 'calc(3.5rem + env(safe-area-inset-bottom))' }
-            : {
-                paddingBottom:
-                  'calc(4rem + env(safe-area-inset-bottom))',
-              }
+          isChatThread
+            ? undefined
+            : isReels || isMessages
+              ? { paddingBottom: 'calc(3.5rem + env(safe-area-inset-bottom))' }
+              : {
+                  paddingBottom:
+                    'calc(4rem + env(safe-area-inset-bottom))',
+                }
         }
       >
         <Routes>
@@ -59,7 +63,7 @@ function App() {
         </Routes>
       </main>
 
-      <BottomNav />
+      {!isChatThread && <BottomNav />}
     </div>
   )
 }

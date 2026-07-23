@@ -8,6 +8,10 @@ import {
   publishEvent,
 } from '../lib/nostr'
 import { db } from '../lib/db'
+import {
+  notifyFollowsChanged,
+  syncProfileStatsFollowing,
+} from '../lib/follows'
 
 /**
  * Follow / unfollow a pubkey by republishing Kind 3 contact list.
@@ -81,6 +85,8 @@ export function useFollow(targetPubkey: string | null | undefined) {
         following: list,
         updatedAt: Date.now(),
       })
+      await syncProfileStatsFollowing(pubkey, list)
+      notifyFollowsChanged(pubkey)
       void publishEvent(signed)
       setFollowing(list.includes(targetPubkey))
       return true

@@ -19,6 +19,7 @@ import {
   nextUntilCursor,
   querySyncThrottled,
 } from './relayThrottle'
+import { getMyLike } from './reactions'
 
 /** Kind 22 = short-form / vertical video (NIP-71). Kind 1 = text/image notes. */
 export const FEED_KINDS = [1, 21, 22] as const
@@ -185,8 +186,138 @@ export function buildCommentEvent(target: Event, text: string): EventTemplate {
       ['e', target.id, '', 'root'],
       ['e', target.id, '', 'reply'],
       ['p', target.pubkey],
+      ['client', 'aazaad'],
     ],
   }
+}
+
+export interface PostComment {
+  id: string
+  pubkey: string
+  content: string
+  createdAt: number
+  likes: number
+  likedByMe: boolean
+  raw: Event
+}
+
+/** Most liked first; ties broken by newest. */
+export function sortCommentsByLikes(comments: PostComment[]): PostComment[] {
+  return [...comments].sort(
+    (a, b) => b.likes - a.likes || b.createdAt - a.createdAt,
+  )
+}
+
+/** True when this kind-1 note is a reply to `postId` (not a root feed post). */
+export function isCommentOnPost(event: Event, postId: string): boolean {
+  if (event.kind !== 1) return false
+  if (parseFeedPost(event)) return false
+  const refs = event.tags.filter((t) => t[0] === 'e' && t[1]).map((t) => t[1]!)
+  return refs.includes(postId)
+}
+
+export function parseCommentEvent(
+  event: Event,
+  postId: string,
+  engagement?: { likes?: number; likedByMe?: boolean },
+): PostComment | null {
+  if (!isCommentOnPost(event, postId)) return null
+  const content = event.content.trim()
+  if (!content) return null
+  return {
+    id: event.id,
+    pubkey: event.pubkey,
+    content,
+    createdAt: event.created_at,
+    likes: engagement?.likes ?? 0,
+    likedByMe: engagement?.likedByMe ?? false,
+    raw: event,
+  }
+}
+
+/**
+ * Load comments for one post — direct relay query (bypasses feed throttle)
+ * so the sheet feels as fast as opening a post.
+ */
+export async function listCommentsForPost(
+  postId: string,
+  opts?: {
+    relays?: readonly string[]
+    maxWait?: number
+    viewerPubkey?: string | null
+  },
+): Promise<PostComment[]> {
+  if (!postId) return []
+  const relays = [...(opts?.relays ?? DEFAULT_RELAYS)]
+  const maxWait = opts?.maxWait ?? 2200
+  const pool = getPool()
+
+  const events = await pool.querySync(
+    relays,
+    {
+      kinds: [1],
+      '#e': [postId],
+      limit: 120,
+    },
+    { maxWait },
+  )
+
+  const byId = new Map<string, PostComment>()
+  for (const event of events) {
+    const parsed = parseCommentEvent(event, postId)
+    if (parsed) byId.set(parsed.id, parsed)
+  }
+  let comments = [...byId.values()]
+  if (comments.length === 0) return []
+
+  const ids = comments.map((c) => c.id)
+  // Direct like queries (parallel chunks) — avoid feed throttle queue
+  const likePromises: Promise<Event[]>[] = []
+  for (let i = 0; i < ids.length; i += ENGAGEMENT_ID_CHUNK) {
+    const chunk = ids.slice(i, i + ENGAGEMENT_ID_CHUNK)
+    likePromises.push(
+      pool.querySync(
+        relays,
+        {
+          kinds: [7],
+          '#e': chunk,
+          limit: ENGAGEMENT_EVENT_LIMIT,
+        },
+        { maxWait },
+      ),
+    )
+  }
+  const likeEvents = (await Promise.all(likePromises)).flat()
+  const likeCounts = countByTarget(likeEvents, 7)
+
+  const likedIds = new Set<string>()
+  if (opts?.viewerPubkey) {
+    const myLikes = likeEvents.filter(
+      (e) =>
+        e.kind === 7 &&
+        e.pubkey === opts.viewerPubkey &&
+        (!e.content || e.content === '+' || ['❤️', '🤙', '💜'].includes(e.content)),
+    )
+    for (const event of myLikes) {
+      const eTag = event.tags.find((t) => t[0] === 'e')?.[1]
+      if (eTag) likedIds.add(eTag)
+    }
+    const local = await Promise.all(
+      ids.map(async (id) => [id, await getMyLike(opts.viewerPubkey!, id)] as const),
+    )
+    for (const [id, row] of local) {
+      if (row?.active === 1) likedIds.add(id)
+      if (row?.active === 0) likedIds.delete(id)
+    }
+  }
+
+  comments = comments.map((c) => ({
+    ...c,
+    likes: Math.max(c.likes, likeCounts.get(c.id) ?? 0),
+    likedByMe: likedIds.has(c.id),
+  }))
+
+  return sortCommentsByLikes(comments)
 }
 
 function mediaTypeFromMime(
@@ -357,7 +488,7 @@ export async function fetchRecentPostEvents(
 export async function fetchAuthorMediaEvents(
   pubkey: string,
   relays: readonly string[] = DEFAULT_RELAYS,
-  maxWait = 5000,
+  maxWait = 3200,
 ): Promise<Event[]> {
   const page = await fetchAuthorsMediaEventsPage({
     authors: [pubkey],

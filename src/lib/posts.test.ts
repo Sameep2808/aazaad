@@ -3,10 +3,12 @@ import type { Event } from 'nostr-tools'
 import {
   buildMediaEventTemplate,
   buildTextEventTemplate,
+  parseCommentEvent,
   parseFeedPost,
   scorePost,
   rankPosts,
   countByTarget,
+  sortCommentsByLikes,
   type FeedPost,
 } from './posts'
 
@@ -122,6 +124,43 @@ describe('posts / feed algorithm', () => {
       sig: '2'.repeat(128),
     } as Event
     expect(parseFeedPost(event)).toBeNull()
+  })
+
+  it('parses comments on a post', () => {
+    const postId = '1'.repeat(64)
+    const event = {
+      id: '5'.repeat(64),
+      pubkey: 'c'.repeat(64),
+      created_at: 100,
+      kind: 1,
+      content: 'nice shot',
+      tags: [
+        ['e', postId, '', 'root'],
+        ['e', postId, '', 'reply'],
+        ['p', 'a'.repeat(64)],
+      ],
+      sig: '2'.repeat(128),
+    } as Event
+    const comment = parseCommentEvent(event, postId)
+    expect(comment?.content).toBe('nice shot')
+    expect(comment?.pubkey).toBe('c'.repeat(64))
+    expect(comment?.likes).toBe(0)
+    expect(parseCommentEvent(event, '9'.repeat(64))).toBeNull()
+  })
+
+  it('sorts comments by likes then recency', () => {
+    const base = {
+      pubkey: 'a'.repeat(64),
+      content: 'x',
+      likedByMe: false,
+      raw: {} as Event,
+    }
+    const sorted = sortCommentsByLikes([
+      { ...base, id: '1', createdAt: 1, likes: 1 },
+      { ...base, id: '2', createdAt: 3, likes: 5 },
+      { ...base, id: '3', createdAt: 2, likes: 5 },
+    ])
+    expect(sorted.map((c) => c.id)).toEqual(['2', '3', '1'])
   })
 
   it('counts likes by e-tag', () => {

@@ -1,28 +1,45 @@
 import type { Event, EventTemplate } from 'nostr-tools'
-import { DEFAULT_RELAYS, getPool, publishEvent, type Filter } from './nostr'
+import {
+  DM_RELAYS,
+  getPool,
+  normalizePubkey,
+  publishEvent,
+  type Filter,
+} from './nostr'
 import { db, type DmMessageRow, type DmThreadRow } from './db'
 
 export const DM_KIND = 4 as const
+export const DM_UPDATED_EVENT = 'aazaad:dm-updated'
 
 export type DmFolder = 'primary' | 'request'
 
+export function notifyDmUpdated(detail?: {
+  peer?: string
+  messageId?: string
+}): void {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent(DM_UPDATED_EVENT, { detail }))
+}
+
 export function dmThreadKey(ownerPubkey: string, peerPubkey: string): string {
-  return `${ownerPubkey}:${peerPubkey}`
+  return `${normalizePubkey(ownerPubkey)}:${normalizePubkey(peerPubkey)}`
 }
 
 export function dmBlockKey(ownerPubkey: string, peerPubkey: string): string {
-  return `${ownerPubkey}:${peerPubkey}`
+  return `${normalizePubkey(ownerPubkey)}:${normalizePubkey(peerPubkey)}`
 }
 
 export function peerFromDmEvent(
   event: Event,
   myPubkey: string,
 ): string | null {
-  if (event.pubkey === myPubkey) {
+  const me = normalizePubkey(myPubkey)
+  const author = normalizePubkey(event.pubkey)
+  if (author === me) {
     const p = event.tags.find((t) => t[0] === 'p')?.[1]
-    return p && p.length === 64 ? p.toLowerCase() : null
+    return p && p.length === 64 ? normalizePubkey(p) : null
   }
-  if (event.pubkey.length === 64) return event.pubkey.toLowerCase()
+  if (event.pubkey.length === 64) return author
   return null
 }
 
@@ -34,37 +51,128 @@ export function buildEncryptedDmEvent(
     kind: DM_KIND,
     created_at: Math.floor(Date.now() / 1000),
     tags: [
-      ['p', peerPubkey.toLowerCase()],
+      ['p', normalizePubkey(peerPubkey)],
       ['client', 'aazaad'],
     ],
     content: ciphertext,
   }
 }
 
+function mergeEvents(groups: Event[][]): Event[] {
+  const byId = new Map<string, Event>()
+  for (const group of groups) {
+    for (const event of group) byId.set(event.id, event)
+  }
+  return [...byId.values()]
+}
+
 export async function fetchDmEvents(
   myPubkey: string,
-  relays: readonly string[] = DEFAULT_RELAYS,
-  maxWait = 5000,
+  relays: readonly string[] = DM_RELAYS,
+  maxWait = 2800,
 ): Promise<Event[]> {
+  const me = normalizePubkey(myPubkey)
   const pool = getPool()
   const relayList = [...relays]
   const incoming: Filter = {
     kinds: [DM_KIND],
-    '#p': [myPubkey],
+    '#p': [me],
     limit: 200,
   }
   const outgoing: Filter = {
     kinds: [DM_KIND],
-    authors: [myPubkey],
+    authors: [me],
     limit: 200,
   }
   const [a, b] = await Promise.all([
     pool.querySync(relayList, incoming, { maxWait }),
     pool.querySync(relayList, outgoing, { maxWait }),
   ])
-  const byId = new Map<string, Event>()
-  for (const event of [...a, ...b]) byId.set(event.id, event)
-  return [...byId.values()]
+  return mergeEvents([a, b])
+}
+
+/** Tight query for one conversation — much faster than full inbox sync. */
+export async function fetchPeerDmEvents(
+  myPubkey: string,
+  peerPubkey: string,
+  relays: readonly string[] = DM_RELAYS,
+  maxWait = 1600,
+): Promise<Event[]> {
+  const me = normalizePubkey(myPubkey)
+  const peer = normalizePubkey(peerPubkey)
+  const pool = getPool()
+  const relayList = [...relays]
+  const [incoming, outgoing] = await Promise.all([
+    pool.querySync(
+      relayList,
+      { kinds: [DM_KIND], authors: [peer], '#p': [me], limit: 80 },
+      { maxWait },
+    ),
+    pool.querySync(
+      relayList,
+      { kinds: [DM_KIND], authors: [me], '#p': [peer], limit: 80 },
+      { maxWait },
+    ),
+  ])
+  return mergeEvents([incoming, outgoing])
+}
+
+/** Live Kind-4 subscription for full inbox. */
+export function subscribeDmEvents(
+  myPubkey: string,
+  onEvent: (event: Event) => void,
+  relays: readonly string[] = DM_RELAYS,
+): { close: () => void } {
+  const me = normalizePubkey(myPubkey)
+  const pool = getPool()
+  const relayList = [...relays]
+  const since = Math.floor(Date.now() / 1000) - 120
+  const closerIn = pool.subscribeMany(
+    relayList,
+    { kinds: [DM_KIND], '#p': [me], since },
+    { onevent: onEvent },
+  )
+  const closerOut = pool.subscribeMany(
+    relayList,
+    { kinds: [DM_KIND], authors: [me], since },
+    { onevent: onEvent },
+  )
+  return {
+    close: () => {
+      closerIn.close()
+      closerOut.close()
+    },
+  }
+}
+
+/** Live subscription scoped to one peer conversation. */
+export function subscribePeerDmEvents(
+  myPubkey: string,
+  peerPubkey: string,
+  onEvent: (event: Event) => void,
+  relays: readonly string[] = DM_RELAYS,
+): { close: () => void } {
+  const me = normalizePubkey(myPubkey)
+  const peer = normalizePubkey(peerPubkey)
+  const pool = getPool()
+  const relayList = [...relays]
+  const since = Math.floor(Date.now() / 1000) - 120
+  const closerIn = pool.subscribeMany(
+    relayList,
+    { kinds: [DM_KIND], authors: [peer], '#p': [me], since },
+    { onevent: onEvent },
+  )
+  const closerOut = pool.subscribeMany(
+    relayList,
+    { kinds: [DM_KIND], authors: [me], '#p': [peer], since },
+    { onevent: onEvent },
+  )
+  return {
+    close: () => {
+      closerIn.close()
+      closerOut.close()
+    },
+  }
 }
 
 export async function isBlocked(
@@ -79,15 +187,16 @@ export async function blockPeer(
   ownerPubkey: string,
   peerPubkey: string,
 ): Promise<void> {
-  const key = dmBlockKey(ownerPubkey, peerPubkey)
+  const owner = normalizePubkey(ownerPubkey)
+  const peer = normalizePubkey(peerPubkey)
+  const key = dmBlockKey(owner, peer)
   await db.dmBlocks.put({
     key,
-    ownerPubkey,
-    peerPubkey: peerPubkey.toLowerCase(),
+    ownerPubkey: owner,
+    peerPubkey: peer,
     blockedAt: Date.now(),
   })
-  const threadKey = dmThreadKey(ownerPubkey, peerPubkey)
-  await db.dmThreads.delete(threadKey)
+  await db.dmThreads.delete(dmThreadKey(owner, peer))
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('aazaad:blocks-changed'))
   }
@@ -115,11 +224,13 @@ export async function acceptRequest(
   ownerPubkey: string,
   peerPubkey: string,
 ): Promise<void> {
-  const key = dmThreadKey(ownerPubkey, peerPubkey)
+  const owner = normalizePubkey(ownerPubkey)
+  const peer = normalizePubkey(peerPubkey)
+  const key = dmThreadKey(owner, peer)
   await db.dmAccepted.put({
     key,
-    ownerPubkey,
-    peerPubkey: peerPubkey.toLowerCase(),
+    ownerPubkey: owner,
+    peerPubkey: peer,
     acceptedAt: Date.now(),
   })
   const thread = await db.dmThreads.get(key)
@@ -137,12 +248,15 @@ export async function resolveDmFolder(
   peerPubkey: string,
   following: string[],
 ): Promise<DmFolder> {
-  if (following.includes(peerPubkey)) return 'primary'
-  if (await isAcceptedPeer(ownerPubkey, peerPubkey)) return 'primary'
+  const owner = normalizePubkey(ownerPubkey)
+  const peer = normalizePubkey(peerPubkey)
+  const follows = new Set(following.map(normalizePubkey))
+  if (follows.has(peer)) return 'primary'
+  if (await isAcceptedPeer(owner, peer)) return 'primary'
 
   const sent = await db.dmMessages
     .where('[ownerPubkey+peerPubkey]')
-    .equals([ownerPubkey, peerPubkey])
+    .equals([owner, peer])
     .filter((m) => m.direction === 'out')
     .first()
   if (sent) return 'primary'
@@ -150,17 +264,24 @@ export async function resolveDmFolder(
   return 'request'
 }
 
-export async function upsertDmMessage(
-  row: DmMessageRow,
-): Promise<void> {
-  await db.dmMessages.put(row)
+export async function upsertDmMessage(row: DmMessageRow): Promise<void> {
+  await db.dmMessages.put({
+    ...row,
+    ownerPubkey: normalizePubkey(row.ownerPubkey),
+    peerPubkey: normalizePubkey(row.peerPubkey),
+  })
 }
 
 export async function upsertDmThread(
   partial: Omit<DmThreadRow, 'updatedAt'> & { updatedAt?: number },
 ): Promise<void> {
+  const ownerPubkey = normalizePubkey(partial.ownerPubkey)
+  const peerPubkey = normalizePubkey(partial.peerPubkey)
   await db.dmThreads.put({
     ...partial,
+    key: dmThreadKey(ownerPubkey, peerPubkey),
+    ownerPubkey,
+    peerPubkey,
     updatedAt: partial.updatedAt ?? Date.now(),
   })
 }
@@ -169,9 +290,10 @@ export async function loadThreads(
   ownerPubkey: string,
   folder: DmFolder,
 ): Promise<DmThreadRow[]> {
+  const owner = normalizePubkey(ownerPubkey)
   const rows = await db.dmThreads
     .where('[ownerPubkey+folder]')
-    .equals([ownerPubkey, folder])
+    .equals([owner, folder])
     .toArray()
   return rows.sort((a, b) => b.lastAt - a.lastAt)
 }
@@ -182,7 +304,10 @@ export async function loadMessages(
 ): Promise<DmMessageRow[]> {
   return db.dmMessages
     .where('[ownerPubkey+peerPubkey]')
-    .equals([ownerPubkey, peerPubkey.toLowerCase()])
+    .equals([
+      normalizePubkey(ownerPubkey),
+      normalizePubkey(peerPubkey),
+    ])
     .sortBy('createdAt')
 }
 
@@ -192,13 +317,14 @@ export async function cacheAndIndexDm(opts: {
   plaintext: string
   following: string[]
 }): Promise<{ peer: string; folder: DmFolder } | null> {
-  const { ownerPubkey, event, plaintext, following } = opts
+  const ownerPubkey = normalizePubkey(opts.ownerPubkey)
+  const { event, plaintext, following } = opts
   const peer = peerFromDmEvent(event, ownerPubkey)
   if (!peer || peer === ownerPubkey) return null
   if (await isBlocked(ownerPubkey, peer)) return null
 
   const direction: 'in' | 'out' =
-    event.pubkey === ownerPubkey ? 'out' : 'in'
+    normalizePubkey(event.pubkey) === ownerPubkey ? 'out' : 'in'
 
   await upsertDmMessage({
     id: event.id,
@@ -228,7 +354,102 @@ export async function cacheAndIndexDm(opts: {
     unread: direction === 'in' ? unreadBump : 0,
   })
 
+  notifyDmUpdated({ peer, messageId: event.id })
   return { peer, folder }
+}
+
+const DECRYPT_CONCURRENCY = 6
+
+async function mapPool<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  let index = 0
+  async function run() {
+    while (index < items.length) {
+      const current = items[index++]
+      if (current === undefined) return
+      await worker(current)
+    }
+  }
+  const runners = Array.from(
+    { length: Math.min(concurrency, Math.max(1, items.length)) },
+    () => run(),
+  )
+  await Promise.all(runners)
+}
+
+/**
+ * Decrypt + index DM events that are not already cached locally.
+ * Returns how many new messages were stored.
+ */
+export async function ingestDmEvents(opts: {
+  ownerPubkey: string
+  events: Event[]
+  following: string[]
+  decryptDm: (peerPubkey: string, ciphertext: string) => Promise<string>
+}): Promise<number> {
+  const owner = normalizePubkey(opts.ownerPubkey)
+  const pending: Event[] = []
+
+  for (const event of opts.events) {
+    const peer = peerFromDmEvent(event, owner)
+    if (!peer) continue
+    if (await isBlocked(owner, peer)) continue
+    if (await db.dmMessages.get(event.id)) continue
+    pending.push(event)
+  }
+
+  let stored = 0
+  await mapPool(pending, DECRYPT_CONCURRENCY, async (event) => {
+    const peer = peerFromDmEvent(event, owner)
+    if (!peer) return
+    try {
+      const plaintext = await opts.decryptDm(peer, event.content)
+      const indexed = await cacheAndIndexDm({
+        ownerPubkey: owner,
+        event,
+        plaintext,
+        following: opts.following,
+      })
+      if (indexed) stored += 1
+    } catch {
+      // skip undecryptable / foreign
+    }
+  })
+  return stored
+}
+
+/** Fetch from relays, decrypt, and cache. */
+export async function syncDmsFromRelays(opts: {
+  ownerPubkey: string
+  following: string[]
+  decryptDm: (peerPubkey: string, ciphertext: string) => Promise<string>
+}): Promise<number> {
+  const events = await fetchDmEvents(opts.ownerPubkey)
+  return ingestDmEvents({
+    ownerPubkey: opts.ownerPubkey,
+    events,
+    following: opts.following,
+    decryptDm: opts.decryptDm,
+  })
+}
+
+/** Fast peer-scoped sync for an open chat. */
+export async function syncPeerDmsFromRelays(opts: {
+  ownerPubkey: string
+  peerPubkey: string
+  following: string[]
+  decryptDm: (peerPubkey: string, ciphertext: string) => Promise<string>
+}): Promise<number> {
+  const events = await fetchPeerDmEvents(opts.ownerPubkey, opts.peerPubkey)
+  return ingestDmEvents({
+    ownerPubkey: opts.ownerPubkey,
+    events,
+    following: opts.following,
+    decryptDm: opts.decryptDm,
+  })
 }
 
 export async function markThreadRead(

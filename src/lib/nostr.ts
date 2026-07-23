@@ -13,7 +13,23 @@ export const DEFAULT_RELAYS = [
   'wss://relay.damus.io',
   'wss://nos.lol',
   'wss://relay.nostr.band',
+  'wss://relay.0xchat.com',
+  'wss://nostr.mom',
 ] as const
+
+/** Relays preferred for Kind-4 DMs (fast + reliable for chat). */
+export const DM_RELAYS = [
+  'wss://relay.damus.io',
+  'wss://nos.lol',
+  'wss://relay.0xchat.com',
+  'wss://nostr.mom',
+] as const
+
+function isPublishFailure(value: unknown): boolean {
+  return (
+    typeof value === 'string' && value.startsWith('connection failure:')
+  )
+}
 
 /** Singleton pool for the app lifetime */
 let pool: SimplePool | null = null
@@ -47,13 +63,18 @@ export function decodePubkey(input: string): string | null {
   try {
     if (raw.startsWith('npub1') || raw.startsWith('nprofile1')) {
       const decoded = decode(raw)
-      if (decoded.type === 'npub') return decoded.data
-      if (decoded.type === 'nprofile') return decoded.data.pubkey
+      if (decoded.type === 'npub') return decoded.data.toLowerCase()
+      if (decoded.type === 'nprofile') return decoded.data.pubkey.toLowerCase()
     }
   } catch {
     return null
   }
   return null
+}
+
+/** Relays match hex pubkeys case-sensitively — always store/query lowercase. */
+export function normalizePubkey(hex: string): string {
+  return hex.trim().toLowerCase()
 }
 
 /** Build / replace Kind 3 contact list (follow graph). */
@@ -114,7 +135,7 @@ export function secretKeyToHex(secretKey: Uint8Array): string {
 export function parseContactList(event: Event): string[] {
   const following = event.tags
     .filter((tag) => tag[0] === 'p' && typeof tag[1] === 'string' && tag[1].length === 64)
-    .map((tag) => tag[1] as string)
+    .map((tag) => (tag[1] as string).toLowerCase())
   // de-dupe while preserving order
   return [...new Set(following)]
 }
@@ -128,7 +149,7 @@ export function latestContactList(events: Event[]): Event | null {
 export async function fetchContactListEvents(
   pubkey: string,
   relays: readonly string[] = DEFAULT_RELAYS,
-  maxWait = 4000,
+  maxWait = 2500,
 ): Promise<Event[]> {
   const filter: Filter = { kinds: [3], authors: [pubkey], limit: 5 }
   return getPool().querySync([...relays], filter, { maxWait })
@@ -141,7 +162,7 @@ export async function fetchContactListEvents(
 export async function fetchFollowerCandidateEvents(
   pubkey: string,
   relays: readonly string[] = DEFAULT_RELAYS,
-  maxWait = 5000,
+  maxWait = 2800,
 ): Promise<Event[]> {
   const filter: Filter = { kinds: [3], '#p': [pubkey], limit: 300 }
   return getPool().querySync([...relays], filter, { maxWait })
@@ -224,16 +245,84 @@ export async function fetchProfileMetadata(
   return parseProfileMetadata(latest)
 }
 
+/**
+ * Publish to relays. Returns URLs that accepted the event.
+ * Note: nostr-tools resolves some connection failures as fulfilled strings
+ * starting with "connection failure:" — those are treated as failures here.
+ */
 export async function publishEvent(
   event: Event,
   relays: readonly string[] = DEFAULT_RELAYS,
 ): Promise<string[]> {
+  const relayList = [...relays]
   const results = await Promise.allSettled(
-    getPool().publish([...relays], event),
+    getPool().publish(relayList, event),
   )
-  return results
-    .filter((r): r is PromiseFulfilledResult<string> => r.status === 'fulfilled')
-    .map((r) => r.value)
+  const accepted: string[] = []
+  for (let i = 0; i < relayList.length; i++) {
+    const result = results[i]
+    const url = relayList[i]
+    if (!result || !url) continue
+    if (result.status !== 'fulfilled') continue
+    if (isPublishFailure(result.value)) continue
+    accepted.push(url)
+  }
+  return accepted
+}
+
+/**
+ * Resolve as soon as the first relay accepts. Other publishes keep going
+ * in the background so chat stays snappy.
+ */
+export function publishEventRace(
+  event: Event,
+  relays: readonly string[] = DEFAULT_RELAYS,
+  timeoutMs = 4500,
+): Promise<string> {
+  const relayList = [...relays]
+  if (relayList.length === 0) {
+    return Promise.reject(new Error('No relays configured'))
+  }
+
+  return new Promise((resolve, reject) => {
+    let remaining = relayList.length
+    let done = false
+    const timer = setTimeout(() => {
+      if (done) return
+      done = true
+      reject(new Error('Publish timed out'))
+    }, timeoutMs)
+
+    const finishOk = (url: string) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      resolve(url)
+    }
+
+    const finishFail = () => {
+      remaining -= 1
+      if (!done && remaining <= 0) {
+        done = true
+        clearTimeout(timer)
+        reject(new Error('Could not reach any relay'))
+      }
+    }
+
+    const pubs = getPool().publish(relayList, event)
+    for (let i = 0; i < pubs.length; i++) {
+      const url = relayList[i]!
+      pubs[i]!
+        .then((value) => {
+          if (isPublishFailure(value)) {
+            finishFail()
+            return
+          }
+          finishOk(url)
+        })
+        .catch(() => finishFail())
+    }
+  })
 }
 
 export function signWithSecretKey(

@@ -160,6 +160,7 @@ export async function wipeLocalUserData(pubkey: string): Promise<void> {
       db.dmThreads,
       db.dmBlocks,
       db.dmAccepted,
+      db.comments,
     ],
     async () => {
       await db.accounts.where('pubkey').equals(pubkey).delete()
@@ -193,6 +194,9 @@ export async function wipeLocalUserData(pubkey: string): Promise<void> {
       await db.dmThreads.where('ownerPubkey').equals(pubkey).delete()
       await db.dmBlocks.where('ownerPubkey').equals(pubkey).delete()
       await db.dmAccepted.where('ownerPubkey').equals(pubkey).delete()
+
+      const myComments = await db.comments.where('pubkey').equals(pubkey).toArray()
+      for (const row of myComments) await db.comments.delete(row.id)
       // Keep deletedEvents tombstones so relays cannot revive wiped posts in this browser
     },
   )

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, ShieldBan } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
@@ -19,6 +19,12 @@ export function ChatThread() {
   const { get: getProfile } = useProfiles(peer ? [peer] : [])
   const [text, setText] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
+  const bottomRef = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+  }, [chat.messages.length])
 
   if (!ready) {
     return (
@@ -54,8 +60,12 @@ export function ChatThread() {
   const handle = displayHandle(profile)
 
   async function onSend() {
-    const ok = await chat.send(text)
-    if (ok) setText('')
+    const draft = text.trim()
+    if (!draft) return
+    // Clear immediately so the next message can be typed right away
+    setText('')
+    const ok = await chat.send(draft)
+    if (!ok) setText(draft)
   }
 
   async function onBlock() {
@@ -152,10 +162,13 @@ export function ChatThread() {
           You blocked this user.
         </div>
       ) : (
-        <div className="scroll-touch flex-1 space-y-2 overflow-y-auto px-3 py-3">
+        <div
+          ref={listRef}
+          className="scroll-touch flex-1 space-y-2 overflow-y-auto px-3 py-3"
+        >
           {chat.messages.length === 0 ? (
             <p className="py-10 text-center text-sm text-zinc-500">
-              Say hello — messages are encrypted end-to-end (NIP-04).
+              Say hello — messages are private between you two.
             </p>
           ) : (
             chat.messages.map((msg) => (
@@ -172,6 +185,7 @@ export function ChatThread() {
                     msg.direction === 'out'
                       ? 'rounded-br-md bg-sky-600 text-white'
                       : 'rounded-bl-md bg-zinc-800 text-zinc-100',
+                    msg.id.startsWith('pending:') ? 'opacity-70' : '',
                   ].join(' ')}
                 >
                   <p className="allow-select whitespace-pre-wrap break-words">
@@ -185,15 +199,18 @@ export function ChatThread() {
                         : 'text-zinc-500',
                     ].join(' ')}
                   >
-                    {new Date(msg.createdAt).toLocaleTimeString([], {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
+                    {msg.id.startsWith('pending:')
+                      ? 'Sending…'
+                      : new Date(msg.createdAt).toLocaleTimeString([], {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
                   </p>
                 </div>
               </div>
             ))
           )}
+          <div ref={bottomRef} />
         </div>
       )}
 
@@ -216,15 +233,16 @@ export function ChatThread() {
               }
             }}
             placeholder="Message…"
+            autoComplete="off"
             className="min-h-11 flex-1 rounded-full border border-zinc-700 bg-zinc-900 px-4 text-sm outline-none"
           />
           <button
             type="button"
-            disabled={chat.sending || !text.trim()}
+            disabled={!text.trim()}
             onClick={() => void onSend()}
             className="min-h-11 touch-manipulation rounded-full bg-white px-4 text-sm font-semibold text-zinc-900 disabled:opacity-40"
           >
-            {chat.sending ? '…' : 'Send'}
+            Send
           </button>
         </div>
       )}

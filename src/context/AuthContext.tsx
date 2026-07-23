@@ -12,6 +12,7 @@ import {
   createEphemeralIdentity,
   decodeNsec,
   hexToNpub,
+  normalizePubkey,
   pubkeyFromSecretKey,
   secretKeyToHex,
   signWithSecretKey,
@@ -145,12 +146,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (session.method === 'nip07') {
       const pk = sessionStorage.getItem('aazaad:nip07-pubkey')
       if (pk) {
-        setPubkey(pk)
+        setPubkey(normalizePubkey(pk))
         setMethod('nip07')
       }
     } else if (session.secretKey) {
       setSecretKey(session.secretKey)
-      setPubkey(pubkeyFromSecretKey(session.secretKey))
+      setPubkey(normalizePubkey(pubkeyFromSecretKey(session.secretKey)))
       setUsername(session.username)
       setMethod(session.method)
     }
@@ -170,7 +171,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         method: opts.method,
       })
       setSecretKey(opts.secretKey)
-      setPubkey(opts.pubkey)
+      setPubkey(normalizePubkey(opts.pubkey))
       setUsername(opts.username)
       setMethod(opts.method)
     },
@@ -208,7 +209,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!window.nostr?.getPublicKey) {
       throw new Error('No NIP-07 extension found (e.g. Alby, nos2x)')
     }
-    const pk = await window.nostr.getPublicKey()
+    const pk = normalizePubkey(await window.nostr.getPublicKey())
     persistSession({
       secretKey: null,
       username: null,
@@ -264,14 +265,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const encryptDm = useCallback(
     async (peerPubkey: string, plaintext: string): Promise<string> => {
+      const peer = normalizePubkey(peerPubkey)
       if (method === 'nip07') {
         if (!window.nostr?.nip04?.encrypt) {
           throw new Error('Extension does not support encrypted DMs (NIP-04)')
         }
-        return window.nostr.nip04.encrypt(peerPubkey, plaintext)
+        return window.nostr.nip04.encrypt(peer, plaintext)
       }
       if ((method === 'password' || method === 'ephemeral') && secretKey) {
-        return nip04.encrypt(secretKey, peerPubkey, plaintext)
+        return nip04.encrypt(secretKey, peer, plaintext)
       }
       throw new Error('Log in to send messages')
     },
@@ -280,14 +282,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const decryptDm = useCallback(
     async (peerPubkey: string, ciphertext: string): Promise<string> => {
+      const peer = normalizePubkey(peerPubkey)
       if (method === 'nip07') {
         if (!window.nostr?.nip04?.decrypt) {
           throw new Error('Extension does not support encrypted DMs (NIP-04)')
         }
-        return window.nostr.nip04.decrypt(peerPubkey, ciphertext)
+        return window.nostr.nip04.decrypt(peer, ciphertext)
       }
       if ((method === 'password' || method === 'ephemeral') && secretKey) {
-        return nip04.decrypt(secretKey, peerPubkey, ciphertext)
+        return nip04.decrypt(secretKey, peer, ciphertext)
       }
       throw new Error('Log in to read messages')
     },
@@ -296,8 +299,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const canDm =
     Boolean(pubkey) &&
-    (Boolean(secretKey) ||
-      (method === 'nip07' && typeof window !== 'undefined'))
+    (Boolean(secretKey) || method === 'nip07')
 
   const value = useMemo<AuthState>(
     () => ({

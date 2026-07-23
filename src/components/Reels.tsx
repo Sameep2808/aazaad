@@ -16,6 +16,7 @@ import { AutoMedia, type AutoMediaHandle } from './AutoMedia'
 import { DoubleTapLikeLayer } from './DoubleTapLikeLayer'
 import { PostAuthorBar } from './UserAvatar'
 import { ShareSheet } from './ShareSheet'
+import { CommentsSheet } from './CommentsSheet'
 
 interface ReelsProps {
   posts: FeedPost[]
@@ -63,10 +64,9 @@ function ReelSlide({
   const { toggleRepost, busyId, error: repostError, isReposted, hydrate } =
     useRepost()
   const mediaRef = useRef<AutoMediaHandle>(null)
-  const [showComment, setShowComment] = useState(false)
-  const [commentText, setCommentText] = useState('')
   const [msg, setMsg] = useState<string | null>(null)
   const [shareOpen, setShareOpen] = useState(false)
+  const [commentsOpen, setCommentsOpen] = useState(false)
 
   useEffect(() => {
     if (error) setMsg(error)
@@ -174,7 +174,7 @@ function ReelSlide({
 
         <button
           type="button"
-          onClick={() => setShowComment((v) => !v)}
+          onClick={() => setCommentsOpen(true)}
           className="flex touch-manipulation flex-col items-center gap-1 text-white active:opacity-70"
         >
           <span className="rounded-full bg-black/35 p-3 backdrop-blur-sm">
@@ -242,32 +242,6 @@ function ReelSlide({
         </button>
       </div>
 
-      {showComment && (
-        <div className="absolute inset-x-0 bottom-16 z-20 flex gap-2 bg-black/80 px-3 py-2 backdrop-blur-md">
-          <input
-            value={commentText}
-            onChange={(e) => setCommentText(e.target.value)}
-            placeholder="Add a comment…"
-            className="min-h-11 flex-1 rounded-full border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-white outline-none"
-          />
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => {
-              void comment(commentText).then((ok) => {
-                if (ok) {
-                  setCommentText('')
-                  setShowComment(false)
-                }
-              })
-            }}
-            className="min-h-11 touch-manipulation rounded-full bg-white px-4 text-xs font-semibold text-zinc-900"
-          >
-            Post
-          </button>
-        </div>
-      )}
-
       <ShareSheet
         post={post}
         open={shareOpen}
@@ -275,6 +249,14 @@ function ReelSlide({
         onShared={(count) =>
           setMsg(count === 1 ? 'Sent to 1 person' : `Sent to ${count} people`)
         }
+      />
+      <CommentsSheet
+        post={post}
+        open={commentsOpen}
+        onClose={() => setCommentsOpen(false)}
+        busy={busy}
+        error={error}
+        onSubmit={comment}
       />
     </section>
   )

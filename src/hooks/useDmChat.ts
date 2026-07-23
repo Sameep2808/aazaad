@@ -1,20 +1,28 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { useSocialGraph } from './useSocialGraph'
 import {
   acceptRequest,
   blockPeer,
+  DM_UPDATED_EVENT,
+  ingestDmEvents,
   isBlocked,
   loadMessages,
   markThreadRead,
   resolveDmFolder,
+  subscribePeerDmEvents,
+  syncPeerDmsFromRelays,
 } from '../lib/dm'
 import { sendEncryptedDm } from '../lib/sendDm'
 import type { DmMessageRow } from '../lib/db'
 import { db } from '../lib/db'
+import { normalizePubkey } from '../lib/nostr'
+
+/** Fast catch-up while a chat is open (peer-scoped query). */
+const CHAT_POLL_MS = 2_500
 
 export function useDmChat(peerPubkey: string | null) {
-  const { pubkey, encryptDm, signEvent, canDm } = useAuth()
+  const { pubkey, encryptDm, decryptDm, signEvent, canDm } = useAuth()
   const { following } = useSocialGraph(pubkey)
   const [messages, setMessages] = useState<DmMessageRow[]>([])
   const [folder, setFolder] = useState<'primary' | 'request'>('primary')
@@ -22,21 +30,101 @@ export function useDmChat(peerPubkey: string | null) {
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const reload = useCallback(async () => {
+  const followingRef = useRef(following)
+  followingRef.current = following
+  const decryptRef = useRef(decryptDm)
+  decryptRef.current = decryptDm
+  const syncingRef = useRef(false)
+  const inFlightRef = useRef(0)
+
+  const reloadLocal = useCallback(async () => {
     if (!pubkey || !peerPubkey) {
       setMessages([])
       return
     }
-    const peer = peerPubkey.toLowerCase()
-    setBlocked(await isBlocked(pubkey, peer))
-    setFolder(await resolveDmFolder(pubkey, peer, following))
-    setMessages(await loadMessages(pubkey, peer))
-    await markThreadRead(pubkey, peer)
-  }, [pubkey, peerPubkey, following])
+    const owner = normalizePubkey(pubkey)
+    const peer = normalizePubkey(peerPubkey)
+    setBlocked(await isBlocked(owner, peer))
+    setFolder(await resolveDmFolder(owner, peer, followingRef.current))
+    setMessages(await loadMessages(owner, peer))
+    await markThreadRead(owner, peer)
+  }, [pubkey, peerPubkey])
+
+  const syncPeer = useCallback(async () => {
+    if (!pubkey || !peerPubkey || !canDm) {
+      await reloadLocal()
+      return
+    }
+    if (syncingRef.current) return
+    syncingRef.current = true
+    try {
+      await syncPeerDmsFromRelays({
+        ownerPubkey: pubkey,
+        peerPubkey,
+        following: followingRef.current,
+        decryptDm: decryptRef.current,
+      })
+      await reloadLocal()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to sync messages')
+      await reloadLocal()
+    } finally {
+      syncingRef.current = false
+    }
+  }, [pubkey, peerPubkey, canDm, reloadLocal])
 
   useEffect(() => {
-    void reload()
-  }, [reload])
+    void reloadLocal()
+  }, [reloadLocal])
+
+  useEffect(() => {
+    void syncPeer()
+  }, [syncPeer])
+
+  // Fast poll + react to local DM writes
+  useEffect(() => {
+    if (!pubkey || !peerPubkey || !canDm) return
+
+    const id = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void syncPeer()
+    }, CHAT_POLL_MS)
+
+    function onVisibility() {
+      if (document.visibilityState === 'visible') void syncPeer()
+    }
+    function onDmUpdated() {
+      void reloadLocal()
+    }
+
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener(DM_UPDATED_EVENT, onDmUpdated)
+    return () => {
+      window.clearInterval(id)
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener(DM_UPDATED_EVENT, onDmUpdated)
+    }
+  }, [pubkey, peerPubkey, canDm, syncPeer, reloadLocal])
+
+  // Live peer-scoped subscription
+  useEffect(() => {
+    if (!pubkey || !peerPubkey || !canDm) return
+    const owner = normalizePubkey(pubkey)
+    const peer = normalizePubkey(peerPubkey)
+    const sub = subscribePeerDmEvents(owner, peer, (event) => {
+      void ingestDmEvents({
+        ownerPubkey: owner,
+        events: [event],
+        following: followingRef.current,
+        decryptDm: decryptRef.current,
+      }).then(async (n) => {
+        if (n > 0) {
+          setMessages(await loadMessages(owner, peer))
+          await markThreadRead(owner, peer)
+        }
+      })
+    })
+    return () => sub.close()
+  }, [pubkey, peerPubkey, canDm])
 
   const send = useCallback(
     async (text: string) => {
@@ -48,58 +136,69 @@ export function useDmChat(peerPubkey: string | null) {
         setError('Encrypted messaging unavailable for this login')
         return false
       }
-      const peer = peerPubkey.toLowerCase()
-      if (await isBlocked(pubkey, peer)) {
+      const owner = normalizePubkey(pubkey)
+      const peer = normalizePubkey(peerPubkey)
+      if (await isBlocked(owner, peer)) {
         setError('You blocked this user')
         return false
       }
       const trimmed = text.trim()
       if (!trimmed) return false
 
-      setSending(true)
+      // Optimistic bubble so rapid back-and-forth feels instant
+      const tempId = `pending:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`
+      const optimistic: DmMessageRow = {
+        id: tempId,
+        ownerPubkey: owner,
+        peerPubkey: peer,
+        createdAt: Date.now(),
+        content: trimmed,
+        direction: 'out',
+        eventJson: '',
+      }
+      setMessages((prev) => [...prev, optimistic])
       setError(null)
+      inFlightRef.current += 1
+      setSending(true)
+
       try {
         await sendEncryptedDm({
-          ownerPubkey: pubkey,
+          ownerPubkey: owner,
           peerPubkey: peer,
           plaintext: trimmed,
-          following,
+          following: followingRef.current,
           encryptDm,
           signEvent,
         })
-        await reload()
+        setMessages(await loadMessages(owner, peer))
+        setFolder('primary')
         return true
       } catch (err) {
+        setMessages((prev) => prev.filter((m) => m.id !== tempId))
         setError(err instanceof Error ? err.message : 'Send failed')
         return false
       } finally {
-        setSending(false)
+        inFlightRef.current = Math.max(0, inFlightRef.current - 1)
+        if (inFlightRef.current === 0) setSending(false)
       }
     },
-    [
-      pubkey,
-      peerPubkey,
-      canDm,
-      encryptDm,
-      signEvent,
-      following,
-      reload,
-    ],
+    [pubkey, peerPubkey, canDm, encryptDm, signEvent],
   )
 
   const accept = useCallback(async () => {
     if (!pubkey || !peerPubkey) return
     await acceptRequest(pubkey, peerPubkey)
-    await reload()
-  }, [pubkey, peerPubkey, reload])
+    await reloadLocal()
+  }, [pubkey, peerPubkey, reloadLocal])
 
   const block = useCallback(async () => {
     if (!pubkey || !peerPubkey) return
-    const peer = peerPubkey.toLowerCase()
-    await blockPeer(pubkey, peer)
+    const owner = normalizePubkey(pubkey)
+    const peer = normalizePubkey(peerPubkey)
+    await blockPeer(owner, peer)
     await db.dmMessages
       .where('[ownerPubkey+peerPubkey]')
-      .equals([pubkey, peer])
+      .equals([owner, peer])
       .delete()
     setBlocked(true)
     setMessages([])
@@ -114,7 +213,7 @@ export function useDmChat(peerPubkey: string | null) {
     send,
     accept,
     block,
-    refresh: reload,
+    refresh: syncPeer,
     clearError: () => setError(null),
   }
 }

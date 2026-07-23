@@ -126,6 +126,18 @@ export interface DeletedEventRow {
   deletedAt: number
 }
 
+/** Cached comment on a post (for instant Comments sheet). */
+export interface CachedCommentRow {
+  id: string
+  postId: string
+  pubkey: string
+  content: string
+  createdAt: number
+  likes: number
+  eventJson: string
+  updatedAt: number
+}
+
 class AazaadDB extends Dexie {
   follows!: Table<FollowCacheRow, string>
   seeds!: Table<SeededCidRow, string>
@@ -140,6 +152,7 @@ class AazaadDB extends Dexie {
   dmBlocks!: Table<DmBlockRow, string>
   dmAccepted!: Table<DmAcceptedRow, string>
   deletedEvents!: Table<DeletedEventRow, string>
+  comments!: Table<CachedCommentRow, string>
 
   constructor() {
     super('aazaad')
@@ -253,6 +266,23 @@ class AazaadDB extends Dexie {
       dmBlocks: 'key, ownerPubkey, peerPubkey',
       dmAccepted: 'key, ownerPubkey, peerPubkey',
       deletedEvents: 'id, pubkey, deletedAt',
+    })
+    this.version(11).stores({
+      follows: 'pubkey, updatedAt',
+      seeds: 'cid, pinnedAt',
+      accounts: 'username, pubkey, createdAt',
+      profileStats: 'pubkey, updatedAt',
+      posts: 'id, pubkey, createdAt, cid, updatedAt',
+      profiles: 'pubkey, username, updatedAt',
+      reposts: 'id, reposterPubkey, originalEventId, createdAt, updatedAt',
+      myLikes: 'key, pubkey, postId, active, updatedAt',
+      dmMessages: 'id, ownerPubkey, peerPubkey, [ownerPubkey+peerPubkey], createdAt',
+      dmThreads:
+        'key, ownerPubkey, peerPubkey, folder, [ownerPubkey+folder], lastAt, updatedAt',
+      dmBlocks: 'key, ownerPubkey, peerPubkey',
+      dmAccepted: 'key, ownerPubkey, peerPubkey',
+      deletedEvents: 'id, pubkey, deletedAt',
+      comments: 'id, postId, pubkey, createdAt, likes, updatedAt',
     })
   }
 }
