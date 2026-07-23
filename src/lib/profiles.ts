@@ -324,6 +324,11 @@ export function buildProfileMetadataEvent(opts: {
     about: opts.about ?? opts.existing?.about ?? 'aazaad user',
   }
 
+  // Keep cross-device password backup when another client field is updated
+  if (opts.existing?.aazaad_ncryptsec) {
+    metadata.aazaad_ncryptsec = opts.existing.aazaad_ncryptsec
+  }
+
   if (opts.pictureCid) {
     // HTTP gateway URL so browsers / Nostr clients can load the avatar
     metadata.picture = cidToGatewayUrl(opts.pictureCid)

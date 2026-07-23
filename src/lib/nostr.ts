@@ -220,6 +220,21 @@ export interface NostrProfileMetadata {
   display_name?: string
   about?: string
   picture?: string
+  /**
+   * NIP-49 ncryptsec — password-encrypted secret key so the same aazaad
+   * account can be unlocked on another device (safe to publish; needs password).
+   */
+  aazaad_ncryptsec?: string
+}
+
+/** True when metadata carries a portable aazaad password backup. */
+export function hasAazaadEncryptedKey(
+  meta: NostrProfileMetadata,
+): meta is NostrProfileMetadata & { aazaad_ncryptsec: string } {
+  return (
+    typeof meta.aazaad_ncryptsec === 'string' &&
+    meta.aazaad_ncryptsec.startsWith('ncryptsec1')
+  )
 }
 
 export function parseProfileMetadata(event: Event | null): NostrProfileMetadata {

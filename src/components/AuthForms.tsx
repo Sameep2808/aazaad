@@ -145,8 +145,9 @@ export function AuthForms() {
       )}
 
       <p className="text-center text-[11px] leading-relaxed text-zinc-500">
-        Accounts are stored on this device only. Your password encrypts your Nostr
-        private key (NIP-49) — there is no central server.
+        Your password encrypts your Nostr private key (NIP-49). The encrypted key
+        is published to relays so you can log in on other devices with the same
+        username and password.
       </p>
 
       <div className="relative py-1 text-center text-[10px] uppercase tracking-wider text-zinc-600">

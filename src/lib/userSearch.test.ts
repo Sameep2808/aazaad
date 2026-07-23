@@ -14,6 +14,7 @@ vi.mock('./nostr', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./nostr')>()
   return {
     ...actual,
+    getPool: () => ({ querySync: vi.fn().mockResolvedValue([]) }),
     publishEvent: vi.fn().mockResolvedValue([]),
   }
 })

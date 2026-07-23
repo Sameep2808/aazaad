@@ -81,10 +81,11 @@ export function HeliaProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true
       if (reprovideTimer !== undefined) window.clearInterval(reprovideTimer)
-      if (node) {
+      if (node && node.status === 'started') {
         void node.stop()
       }
       setHelia(null)
+      setReady(false)
       setMultiaddrs([])
     }
   }, [bootId])

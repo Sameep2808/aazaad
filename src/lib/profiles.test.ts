@@ -69,6 +69,24 @@ describe('profiles', () => {
     expect(extractCid(content.picture)).toBe('bafyavatar')
   })
 
+  it('preserves aazaad_ncryptsec when updating profile picture', () => {
+    const event = buildProfileMetadataEvent({
+      username: 'bob',
+      pictureCid: 'bafyavatar',
+      existing: {
+        name: 'bob',
+        aazaad_ncryptsec: 'ncryptsec1backupkey',
+        about: 'aazaad user',
+      },
+    })
+    const content = JSON.parse(event.content) as {
+      aazaad_ncryptsec?: string
+      picture: string
+    }
+    expect(content.aazaad_ncryptsec).toBe('ncryptsec1backupkey')
+    expect(extractCid(content.picture)).toBe('bafyavatar')
+  })
+
   it('keeps profiles in memory across peeks', () => {
     const pk = 'a'.repeat(64)
     putMemoryProfile(fakeProfile(pk, 'alice'))

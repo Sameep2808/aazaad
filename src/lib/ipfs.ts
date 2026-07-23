@@ -6,7 +6,7 @@ import { CID } from 'multiformats/cid'
 import { multiaddr, type Multiaddr } from '@multiformats/multiaddr'
 import { IPFS_GATEWAYS, cidToGatewayUrl } from './media'
 
-/** Helia with UnixFS; browser createHelia also attaches libp2p. */
+/** Helia with UnixFS; browser createHelia also attaches libp2p after start(). */
 export type HeliaNode = Helia & {
   fs: UnixFS
   libp2p?: {
@@ -22,6 +22,12 @@ export interface CreateHeliaNodeOptions {
   datastore?: HeliaInit['datastore']
   /** IndexedDB name prefix when using default browser stores */
   idbName?: string
+  /**
+   * Start libp2p/bitswap after create (default true).
+   * Set false in unit tests that only need local add/cat — happy-dom
+   * cannot complete browser WebRTC bootstrap and will hang.
+   */
+  start?: boolean
 }
 
 export interface LoadCidOptions {
@@ -43,9 +49,17 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function isHeliaStarted(node: Helia): boolean {
+  return node.status === 'started'
+}
+
 /**
  * Create an in-browser Helia node with IndexedDB-backed block/datastore
  * so uploaded & seeded content survives reloads.
+ *
+ * Helia 7 returns an unstarted node — libp2p is only attached after
+ * `await helia.start()`. Without that, any `node.libp2p` access throws
+ * NotStartedError ("Not started").
  */
 export async function createHeliaNode(
   options: CreateHeliaNodeOptions = {},
@@ -66,10 +80,16 @@ export async function createHeliaNode(
     }
   }
 
-  const helia = await createHelia({
+  const helia = createHelia({
     ...(blockstore ? { blockstore } : {}),
     ...(datastore ? { datastore } : {}),
   })
+
+  // Core: start libp2p + bitswap + routing before any network / libp2p use.
+  // Without this, accessing helia.libp2p throws NotStartedError ("Not started").
+  if (options.start !== false) {
+    await helia.start()
+  }
 
   const fs = unixfs(helia)
   return Object.assign(helia, { fs }) as HeliaNode
@@ -77,13 +97,19 @@ export async function createHeliaNode(
 
 /** Dialable multiaddrs for this browser peer (circuit / webrtc preferred). */
 export function getPeerMultiaddrs(node: HeliaNode): string[] {
-  const addrs = node.libp2p?.getMultiaddrs() ?? []
-  const strings = addrs.map((a) => a.toString())
-  // Prefer relayed / WebRTC addrs — browsers usually cannot dial bare LAN IPs.
-  const preferred = strings.filter(
-    (a) => a.includes('p2p-circuit') || a.includes('/webrtc'),
-  )
-  return preferred.length > 0 ? preferred : strings
+  if (!isHeliaStarted(node)) return []
+  try {
+    const addrs = node.libp2p?.getMultiaddrs() ?? []
+    const strings = addrs.map((a) => a.toString())
+    // Prefer relayed / WebRTC addrs — browsers usually cannot dial bare LAN IPs.
+    const preferred = strings.filter(
+      (a) => a.includes('p2p-circuit') || a.includes('/webrtc'),
+    )
+    return preferred.length > 0 ? preferred : strings
+  } catch {
+    // libp2p getter throws NotStartedError if start() never completed
+    return []
+  }
 }
 
 /**
@@ -93,7 +119,7 @@ export async function waitForDialableAddrs(
   node: HeliaNode,
   timeoutMs = 8_000,
 ): Promise<string[]> {
-  if (!node.libp2p) return []
+  if (!isHeliaStarted(node)) return []
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     const addrs = getPeerMultiaddrs(node)
@@ -115,13 +141,21 @@ export async function dialProviderAddrs(
   addrs: string[],
   timeoutMs = 6_000,
 ): Promise<void> {
-  if (!node.libp2p || addrs.length === 0) return
+  if (!isHeliaStarted(node) || addrs.length === 0) return
+  let libp2p: HeliaNode['libp2p']
+  try {
+    libp2p = node.libp2p
+  } catch {
+    return
+  }
+  if (!libp2p) return
+
   const signal = AbortSignal.timeout(timeoutMs)
   await Promise.allSettled(
     addrs.slice(0, 6).map(async (addr) => {
       if (signal.aborted) return
       try {
-        await node.libp2p!.dial(multiaddr(addr))
+        await libp2p!.dial(multiaddr(addr))
       } catch {
         // Peer offline / undialable — bitswap + gateways still tried
       }
@@ -137,6 +171,7 @@ export async function provideCid(
   node: HeliaNode,
   cidString: string,
 ): Promise<void> {
+  if (!isHeliaStarted(node)) return
   const cid = CID.parse(cidString)
   try {
     await node.routing.provide(cid, {
@@ -180,8 +215,8 @@ export async function uploadFileToIPFS(
     }
   }
 
-  // Critical: announce so followers' Helia nodes can find us via routing
-  await provideCid(node, cid.toString())
+  // Announce in background — never block the upload/publish UI on DHT
+  void provideCid(node, cid.toString())
 
   return cid.toString()
 }
@@ -208,7 +243,8 @@ export async function seedCid(node: HeliaNode, cidString: string): Promise<void>
     }
   }
 
-  await provideCid(node, cidString)
+  // Background announce — seeding UX shouldn't wait on DHT
+  void provideCid(node, cidString)
 }
 
 /**

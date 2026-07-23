@@ -103,8 +103,13 @@ export function Upload() {
     setError(null)
     setStage('publishing')
     try {
-      // Wait for circuit-relay / WebRTC addrs so followers can dial this seeder
-      const providerAddrs = await waitForMultiaddrs(8_000)
+      // Best-effort dialable addrs — never block publishing on relay discovery
+      let providerAddrs: string[] = []
+      try {
+        providerAddrs = await waitForMultiaddrs(8_000)
+      } catch {
+        providerAddrs = []
+      }
       const template = buildMediaEventTemplate({
         file,
         cid,

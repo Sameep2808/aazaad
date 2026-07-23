@@ -9,15 +9,24 @@ import {
   loadCidAsObjectUrl,
 } from './ipfs'
 
+/** Local-only Helia — skip libp2p start (happy-dom hangs on WebRTC bootstrap). */
+async function createLocalNode(prefix: string) {
+  return createHeliaNode({ idbName: `${prefix}-${Date.now()}`, start: false })
+}
+
 describe('ipfs layer', () => {
   const nodes: Awaited<ReturnType<typeof createHeliaNode>>[] = []
 
   afterEach(async () => {
-    await Promise.all(nodes.splice(0).map((n) => n.stop()))
+    await Promise.all(
+      nodes.splice(0).map(async (n) => {
+        if (n.status === 'started') await n.stop()
+      }),
+    )
   })
 
   it('creates a Helia node with UnixFS', async () => {
-    const node = await createHeliaNode({ idbName: `test-${Date.now()}` })
+    const node = await createLocalNode('test')
     nodes.push(node)
     expect(node.fs).toBeDefined()
     expect(node.pins).toBeDefined()
@@ -25,8 +34,18 @@ describe('ipfs layer', () => {
     expect(node.routing).toBeDefined()
   })
 
+  it('starts libp2p when start is left at default', async () => {
+    const node = await createHeliaNode({
+      idbName: `started-${Date.now()}`,
+    })
+    nodes.push(node)
+    expect(node.status).toBe('started')
+    // libp2p is only available after start()
+    expect(node.libp2p).toBeDefined()
+  }, 30_000)
+
   it('uploads a File and returns a valid CID', async () => {
-    const node = await createHeliaNode({ idbName: `upload-${Date.now()}` })
+    const node = await createLocalNode('upload')
     nodes.push(node)
 
     const file = new File([new Uint8Array([1, 2, 3, 4, 5])], 'clip.bin', {
@@ -54,7 +73,7 @@ describe('ipfs layer', () => {
   })
 
   it('loads local CID as object URL without hanging', async () => {
-    const node = await createHeliaNode({ idbName: `load-${Date.now()}` })
+    const node = await createLocalNode('load')
     nodes.push(node)
     const file = new File([new TextEncoder().encode('hello-aazaad')], 't.txt', {
       type: 'text/plain',
@@ -69,7 +88,7 @@ describe('ipfs layer', () => {
   })
 
   it('provideCid does not throw for a local pin', async () => {
-    const node = await createHeliaNode({ idbName: `provide-${Date.now()}` })
+    const node = await createLocalNode('provide')
     nodes.push(node)
     const file = new File([new TextEncoder().encode('provide-me')], 'p.txt')
     const cid = await uploadFileToIPFS(node, file)
@@ -77,8 +96,8 @@ describe('ipfs layer', () => {
   })
 
   it('seeds a CID into a second node via pin + cat', async () => {
-    const a = await createHeliaNode({ idbName: `seed-a-${Date.now()}` })
-    const b = await createHeliaNode({ idbName: `seed-b-${Date.now()}` })
+    const a = await createLocalNode('seed-a')
+    const b = await createLocalNode('seed-b')
     nodes.push(a, b)
 
     const file = new File([new TextEncoder().encode('aazaad-seed')], 't.txt')
@@ -95,7 +114,7 @@ describe('ipfs layer', () => {
   })
 
   it('unseeds by unpinning a previously seeded CID', async () => {
-    const node = await createHeliaNode({ idbName: `unseed-${Date.now()}` })
+    const node = await createLocalNode('unseed')
     nodes.push(node)
 
     const file = new File([new TextEncoder().encode('unpin-me')], 'u.txt')
