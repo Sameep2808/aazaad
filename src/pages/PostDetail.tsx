@@ -10,7 +10,7 @@ import {
   type FeedPost,
 } from '../lib/posts'
 import { cachePostFromEvent, rowToFeedPost } from '../lib/postCache'
-import { isEventDeleted } from '../lib/deletions'
+import { isEventDeleted, syncDeletionsForAuthors } from '../lib/deletions'
 
 const EVENT_ID_RE = /^[0-9a-f]{64}$/i
 
@@ -56,6 +56,15 @@ export function PostDetail() {
         const events = await fetchEventsByIds([eventId])
         const event = events[0]
         if (event) {
+          await syncDeletionsForAuthors([event.pubkey])
+          if (await isEventDeleted(eventId)) {
+            if (!cancelled) {
+              setPost(null)
+              setError('This post was deleted')
+            }
+            return
+          }
+
           const parsed = parseFeedPost(event)
           if (parsed) {
             await cachePostFromEvent(event)

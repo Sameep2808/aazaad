@@ -699,6 +699,29 @@ export async function fetchRepostEventsByAuthors(
   return page.events
 }
 
+/** Fetch NIP-09 Kind 5 deletion events authored by these pubkeys. */
+export async function fetchDeletionEventsByAuthors(
+  authors: string[],
+  relays: readonly string[] = DEFAULT_RELAYS,
+  maxWait = 3200,
+): Promise<Event[]> {
+  const unique = [...new Set(authors.filter(Boolean))]
+  if (unique.length === 0) return []
+
+  const relayList = [...relays]
+  const results: Event[] = []
+  for (let i = 0; i < unique.length; i += AUTHOR_CHUNK_SIZE) {
+    const chunk = unique.slice(i, i + AUTHOR_CHUNK_SIZE)
+    const events = await querySyncThrottled(
+      relayList,
+      { kinds: [5], authors: chunk, limit: 100 },
+      { maxWait },
+    )
+    results.push(...events.filter((e) => e.kind === 5))
+  }
+  return results
+}
+
 export function parseRepostPointers(event: Event): {
   originalEventId: string
   originalPubkey: string

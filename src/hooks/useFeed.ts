@@ -16,7 +16,7 @@ import {
   loadCachedPosts,
   updateCachedEngagement,
 } from '../lib/postCache'
-import { filterOutDeletedPosts } from '../lib/deletions'
+import { filterOutDeletedPosts, syncDeletionsForAuthors } from '../lib/deletions'
 import {
   excludeBlockedPubkeys,
   filterOutBlockedAuthors,
@@ -176,7 +176,9 @@ export function useFeed(
         (p) => p.repost && allowedAuthors.includes(p.repost.pubkey),
       )
       const pageItems = mergeFeedItems(originals, reposts)
-      const engaged = await withEngagement(pageItems)
+      const engaged = await withEngagement(
+        await filterOutDeletedPosts(pageItems),
+      )
       for (const post of engaged) {
         void updateCachedEngagement(post.id, {
           likes: post.likes,
@@ -208,7 +210,11 @@ export function useFeed(
             comments: Math.max(post.comments, local?.comments ?? 0),
           }
         })
-        return rankPosts(filterOutBlockedAuthors(withLocal, blocked))
+        const ranked = rankPosts(filterOutBlockedAuthors(withLocal, blocked))
+        void filterOutDeletedPosts(ranked).then((filtered) => {
+          if (filtered.length !== ranked.length) setPosts(filtered)
+        })
+        return ranked
       })
 
       return engaged.length
@@ -234,6 +240,8 @@ export function useFeed(
     const allowedAuthors = [viewerPubkey, ...safeFollowing]
 
     try {
+      await syncDeletionsForAuthors(allowedAuthors)
+
       const [cachedPosts, cachedReposts] = await Promise.all([
         filterFollowingFeed(
           await loadCachedPosts(),

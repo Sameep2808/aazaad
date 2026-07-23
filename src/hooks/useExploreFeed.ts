@@ -9,7 +9,7 @@ import {
   type FeedPost,
 } from '../lib/posts'
 import { cachePostsFromEvents, mergePosts } from '../lib/postCache'
-import { filterOutDeletedPosts } from '../lib/deletions'
+import { filterOutDeletedPosts, syncDeletionsForAuthors } from '../lib/deletions'
 import {
   excludeBlockedPubkeys,
   filterOutBlockedAuthors,
@@ -169,6 +169,8 @@ export function useExploreFeed(
         setHasMore(false)
         return
       }
+
+      await syncDeletionsForAuthors(authorList)
 
       setPosts([])
       await ingestPage(true)

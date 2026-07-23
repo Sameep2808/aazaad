@@ -3,6 +3,7 @@ import { db } from './db'
 import {
   buildDeletionEvent,
   fetchAuthorsMediaEventsPage,
+  fetchDeletionEventsByAuthors,
   publishEvent,
 } from './posts'
 
@@ -47,6 +48,42 @@ export async function filterOutDeletedPosts<T extends { id: string }>(
   if (deleted.length === 0) return posts
   const banned = new Set(deleted)
   return posts.filter((p) => !banned.has(p.id))
+}
+
+/** Extract deleted event ids from a NIP-09 Kind 5 event. */
+export function parseDeletionTargets(event: Event): string[] {
+  if (event.kind !== 5) return []
+  return event.tags
+    .filter((t) => t[0] === 'e' && t[1])
+    .map((t) => t[1]!)
+}
+
+/** Apply remote Kind 5 deletion events to the local tombstone table. */
+export async function ingestDeletionEvents(events: Event[]): Promise<void> {
+  for (const event of events) {
+    if (event.kind !== 5) continue
+    const targets = parseDeletionTargets(event)
+    if (targets.length === 0) continue
+    await markEventsDeleted(targets, event.pubkey)
+  }
+}
+
+/**
+ * Pull Kind 5 deletions from relays for followed authors so followers
+ * learn about deleted posts (not just the author's browser).
+ */
+export async function syncDeletionsForAuthors(
+  authors: string[],
+  opts?: { relays?: readonly string[]; maxWait?: number },
+): Promise<void> {
+  const unique = [...new Set(authors.filter(Boolean))]
+  if (unique.length === 0) return
+  const events = await fetchDeletionEventsByAuthors(
+    unique,
+    opts?.relays,
+    opts?.maxWait,
+  )
+  await ingestDeletionEvents(events)
 }
 
 /**

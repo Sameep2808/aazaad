@@ -13,7 +13,7 @@ import {
   mergePosts,
   updateCachedEngagement,
 } from '../lib/postCache'
-import { filterOutDeletedPosts } from '../lib/deletions'
+import { filterOutDeletedPosts, syncDeletionsForAuthors } from '../lib/deletions'
 import { filterOutBlockedAuthors, getBlockedSet } from '../lib/blocks'
 import { getMutualPubkeys, prioritizeMutualAuthors } from '../lib/mutuals'
 import { FEED_PAGE_SIZE } from '../lib/relayThrottle'
@@ -102,6 +102,9 @@ export function useReels(
         until: reset ? undefined : untilRef.current ?? undefined,
         limit: FEED_PAGE_SIZE,
       })
+      await syncDeletionsForAuthors([
+        ...new Set(page.events.map((e) => e.pubkey)),
+      ])
       await cachePostsFromEvents(page.events)
       const remote = filterOutBlockedAuthors(
         (

@@ -6,12 +6,14 @@ import {
   deleteAccountAndContent,
   deleteOwnPost,
   filterOutDeletedPosts,
+  ingestDeletionEvents,
   isEventDeleted,
   markEventsDeleted,
+  parseDeletionTargets,
   wipeLocalUserData,
 } from './deletions'
 import { cachePostFromEvent } from './postCache'
-import { buildTextEventTemplate } from './posts'
+import { buildDeletionEvent, buildTextEventTemplate } from './posts'
 
 vi.mock('./nostr', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./nostr')>()
@@ -73,6 +75,28 @@ describe('deletions', () => {
     await markEventsDeleted(['abc'], 'pk')
     const kept = await filterOutDeletedPosts([{ id: 'abc' }, { id: 'def' }])
     expect(kept.map((p) => p.id)).toEqual(['def'])
+  })
+
+  it('parses Kind 5 deletion targets from e tags', () => {
+    const sk = generateSecretKey()
+    const del = finalizeEvent(buildDeletionEvent(['id1', 'id2'], 'delete post'), sk)
+    expect(parseDeletionTargets(del)).toEqual(['id1', 'id2'])
+  })
+
+  it('ingests remote Kind 5 deletions so followers hide deleted posts', async () => {
+    const authorSk = generateSecretKey()
+    const authorPubkey = getPublicKey(authorSk)
+    const post = finalizeEvent(buildTextEventTemplate('gone'), authorSk)
+    await cachePostFromEvent(post)
+    expect(await db.posts.get(post.id)).toBeTruthy()
+
+    const del = finalizeEvent(buildDeletionEvent([post.id], 'delete post'), authorSk)
+    await ingestDeletionEvents([del])
+
+    expect(await isEventDeleted(post.id)).toBe(true)
+    expect(await db.posts.get(post.id)).toBeUndefined()
+    const visible = await filterOutDeletedPosts([{ id: post.id, pubkey: authorPubkey }])
+    expect(visible).toHaveLength(0)
   })
 
   it('deleteOwnPost signs a deletion and removes local cache', async () => {

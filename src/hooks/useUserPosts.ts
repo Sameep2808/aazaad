@@ -12,7 +12,7 @@ import {
   loadCachedPostsByAuthor,
   mergePosts,
 } from '../lib/postCache'
-import { filterOutDeletedPosts } from '../lib/deletions'
+import { filterOutDeletedPosts, syncDeletionsForAuthors } from '../lib/deletions'
 
 export interface UseUserPostsResult {
   posts: FeedPost[]
@@ -39,6 +39,8 @@ export function useUserPosts(pubkey: string | null | undefined): UseUserPostsRes
     setLoading(true)
     setError(null)
     try {
+      await syncDeletionsForAuthors([pubkey])
+
       const cached = await loadCachedPostsByAuthor(pubkey)
       if (cached.length > 0) {
         setPosts(cached)

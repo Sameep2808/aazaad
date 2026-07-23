@@ -1,5 +1,6 @@
 import type { Event } from 'nostr-tools'
 import { db, type CachedRepostRow } from './db'
+import { filterOutDeletedPosts } from './deletions'
 import {
   hydrateRepostsToFeedPosts,
   parseFeedPost,
@@ -84,7 +85,7 @@ export async function loadCachedRepostFeedPosts(
       // skip bad rows
     }
   }
-  return posts
+  return filterOutDeletedPosts(posts)
 }
 
 export async function loadCachedRepostsByAuthor(
@@ -121,5 +122,5 @@ export async function resolveAndCacheReposts(
   await cacheRepostEvents(repostEvents)
   const hydrated = await hydrateRepostsToFeedPosts(repostEvents)
   await cacheHydratedReposts(hydrated)
-  return hydrated
+  return filterOutDeletedPosts(hydrated)
 }
