@@ -38,9 +38,9 @@ export interface LoadCidOptions {
   timeoutMs?: number
 }
 
-const DEFAULT_LOAD_TIMEOUT_MS = 45_000
+const DEFAULT_LOAD_TIMEOUT_MS = 18_000
 const PROVIDE_TIMEOUT_MS = 25_000
-const DIAL_TIMEOUT_MS = 12_000
+const DIAL_TIMEOUT_MS = 4_000
 
 function canUseIndexedDB(): boolean {
   return typeof indexedDB !== 'undefined'
@@ -48,6 +48,25 @@ function canUseIndexedDB(): boolean {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** Hard cap — bitswap may ignore AbortSignal when no providers respond. */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      reject(new Error(`${label} timed out after ${ms}ms`))
+    }, ms)
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer)
+        resolve(value)
+      },
+      (err) => {
+        window.clearTimeout(timer)
+        reject(err)
+      },
+    )
+  })
 }
 
 function isHeliaStarted(node: Helia): boolean {
@@ -299,14 +318,15 @@ async function concatUnixFs(
   cid: CID,
   signal: AbortSignal,
   providerAddrs: string[] = [],
+  offline = false,
 ): Promise<Uint8Array> {
   const providers = parseProviderMultiaddrs(providerAddrs)
   const chunks: Uint8Array[] = []
   let total = 0
   for await (const chunk of node.fs.cat(cid, {
     signal,
-    // Tell bitswap exactly who has the blocks — bypass flaky DHT findProviders
-    ...(providers.length > 0 ? { providers } : {}),
+    offline,
+    ...(providers.length > 0 && !offline ? { providers } : {}),
   })) {
     chunks.push(chunk)
     total += chunk.length
@@ -402,26 +422,39 @@ export async function loadCidAsObjectUrl(
     return URL.createObjectURL(blob)
   }
 
-  // Fast path: already in local IndexedDB blockstore (uploader / prior seed)
+  // Fast path: local blockstore only — no network (poster viewing own upload)
   try {
     if (await node.blockstore.has(cid)) {
-      return toObjectUrl(await concatUnixFs(node, cid, signal))
+      const bytes = await withTimeout(
+        concatUnixFs(node, cid, signal, [], true),
+        Math.min(timeoutMs, 8_000),
+        'local IPFS read',
+      )
+      return toObjectUrl(bytes)
     }
   } catch {
     // fall through to network race
   }
 
-  // MUST dial before/while bitswap — fire-and-forget dial left sessions empty
-  if (providerAddrs.length > 0) {
-    await dialProviderAddrs(
+  // Dial publishers in parallel with fetch — never block the race on dial
+  if (providerAddrs.length > 0 && isHeliaStarted(node)) {
+    void dialProviderAddrs(
       node,
       providerAddrs,
       Math.min(DIAL_TIMEOUT_MS, timeoutMs),
     )
   }
 
-  const heliaBytes = concatUnixFs(node, cid, signal, providerAddrs)
-  const gatewayBytes = fetchCidBytesFromGateways(cidString, signal)
+  const heliaBytes = withTimeout(
+    concatUnixFs(node, cid, signal, providerAddrs),
+    timeoutMs,
+    'Helia bitswap',
+  )
+  const gatewayBytes = withTimeout(
+    fetchCidBytesFromGateways(cidString, signal),
+    Math.min(timeoutMs, 12_000),
+    'IPFS gateway',
+  )
 
   try {
     const bytes = await Promise.any([heliaBytes, gatewayBytes])

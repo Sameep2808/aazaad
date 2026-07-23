@@ -45,7 +45,7 @@ function GridThumb({
           const url = await loadCidAsObjectUrl(helia, post.cid, {
             mimeType: post.mimeType,
             providerAddrs: post.providerAddrs ?? [],
-            timeoutMs: 45_000,
+            timeoutMs: 18_000,
           })
           if (cancelled) {
             URL.revokeObjectURL(url)
