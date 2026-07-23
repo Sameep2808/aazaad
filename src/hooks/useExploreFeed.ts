@@ -9,9 +9,16 @@ import {
   type FeedPost,
 } from '../lib/posts'
 import { cachePostsFromEvents, mergePosts } from '../lib/postCache'
+import { filterOutDeletedPosts } from '../lib/deletions'
+import {
+  excludeBlockedPubkeys,
+  filterOutBlockedAuthors,
+  getBlockedSet,
+} from '../lib/blocks'
 import { discoverFollowersOfFollowing } from '../lib/exploreDiscovery'
 import { getMutualPubkeys, prioritizeMutualAuthors } from '../lib/mutuals'
 import { FEED_PAGE_SIZE } from '../lib/relayThrottle'
+import { useBlockedPubkeys } from './useBlockedPubkeys'
 
 async function withEngagement(posts: FeedPost[]): Promise<FeedPost[]> {
   const ids = [...new Set(posts.map((p) => p.id))]
@@ -42,6 +49,7 @@ export function useExploreFeed(
   const [loadingMore, setLoadingMore] = useState(false)
   const [hasMore, setHasMore] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const { blockedKey } = useBlockedPubkeys(viewerPubkey)
 
   const cursorRef = useRef<{ until: number | null; authorChunk: number }>({
     until: null,
@@ -49,6 +57,7 @@ export function useExploreFeed(
   })
   const mutualsRef = useRef<string[]>([])
   const authorsRef = useRef<string[]>([])
+  const blockedRef = useRef<Set<string>>(new Set())
   const loadingMoreRef = useRef(false)
 
   const followingKey = useMemo(
@@ -88,9 +97,14 @@ export function useExploreFeed(
       authorChunkIndex: reset ? 0 : cursorRef.current.authorChunk,
     })
     await cachePostsFromEvents(page.events)
-    const parsed = page.events
-      .map(parseFeedPost)
-      .filter((p): p is FeedPost => p !== null)
+    const parsed = filterOutBlockedAuthors(
+      await filterOutDeletedPosts(
+        page.events
+          .map(parseFeedPost)
+          .filter((p): p is FeedPost => p !== null),
+      ),
+      blockedRef.current,
+    )
     const withCounts = await withEngagement(parsed)
 
     cursorRef.current = {
@@ -101,7 +115,9 @@ export function useExploreFeed(
 
     setPosts((prev) => {
       const merged = mergePosts(prev, withCounts)
-      const ranked = rankPosts(merged)
+      const ranked = rankPosts(
+        filterOutBlockedAuthors(merged, blockedRef.current),
+      )
       return prioritizeMutualAuthors(
         ranked,
         mutualsRef.current,
@@ -122,22 +138,29 @@ export function useExploreFeed(
     setError(null)
     cursorRef.current = { until: null, authorChunk: 0 }
     try {
-      const mutuals = await getMutualPubkeys(viewerPubkey, followingList)
+      const blocked = await getBlockedSet(viewerPubkey)
+      blockedRef.current = blocked
+      const safeFollowing = excludeBlockedPubkeys(followingList, blocked)
+
+      const mutuals = await getMutualPubkeys(viewerPubkey, safeFollowing)
       mutualsRef.current = mutuals
       const mutualSet = new Set(mutuals)
 
       const discovered = await discoverFollowersOfFollowing(
         viewerPubkey,
-        followingList,
+        safeFollowing,
       )
-      const nonMutualFollowing = followingList.filter(
+      const nonMutualFollowing = safeFollowing.filter(
         (pk) => !mutualSet.has(pk),
       )
       const remaining = [
         ...nonMutualFollowing,
         ...discovered.filter((pk) => !mutualSet.has(pk)),
       ]
-      const authorList = [...new Set([...mutuals, ...remaining])]
+      const authorList = excludeBlockedPubkeys(
+        [...new Set([...mutuals, ...remaining])],
+        blocked,
+      )
       authorsRef.current = authorList
       setAuthors(authorList)
 
@@ -156,7 +179,7 @@ export function useExploreFeed(
     } finally {
       setLoading(false)
     }
-  }, [viewerPubkey, followingList, ingestPage])
+  }, [viewerPubkey, followingList, ingestPage, blockedKey])
 
   const loadMore = useCallback(async () => {
     if (!viewerPubkey || !hasMore || loadingMoreRef.current || loading) return

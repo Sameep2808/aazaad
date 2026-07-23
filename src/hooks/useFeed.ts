@@ -16,11 +16,18 @@ import {
   loadCachedPosts,
   updateCachedEngagement,
 } from '../lib/postCache'
+import { filterOutDeletedPosts } from '../lib/deletions'
+import {
+  excludeBlockedPubkeys,
+  filterOutBlockedAuthors,
+  getBlockedSet,
+} from '../lib/blocks'
 import {
   loadCachedRepostFeedPosts,
   resolveAndCacheReposts,
 } from '../lib/repostCache'
 import { FEED_PAGE_SIZE } from '../lib/relayThrottle'
+import { useBlockedPubkeys } from './useBlockedPubkeys'
 
 export interface UseFeedResult {
   posts: FeedPost[]
@@ -82,6 +89,7 @@ export function useFeed(
   const [loadingMore, setLoadingMore] = useState(false)
   const [hasMore, setHasMore] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const { blockedKey } = useBlockedPubkeys(viewerPubkey)
 
   const cursorRef = useRef<{
     until: number | null
@@ -122,6 +130,7 @@ export function useFeed(
     async (
       viewer: string,
       allowedAuthors: string[],
+      blocked: ReadonlySet<string>,
       reset: boolean,
     ) => {
       const until = reset ? undefined : cursorRef.current.until ?? undefined
@@ -144,15 +153,24 @@ export function useFeed(
       ])
 
       await cachePostsFromEvents(mediaPage.events)
-      const remotePosts = mediaPage.events
-        .map(parseFeedPost)
-        .filter((p): p is FeedPost => p !== null)
-      const remoteReposts = await resolveAndCacheReposts(repostPage.events)
+      const remotePosts = filterOutBlockedAuthors(
+        await filterOutDeletedPosts(
+          mediaPage.events
+            .map(parseFeedPost)
+            .filter((p): p is FeedPost => p !== null),
+        ),
+        blocked,
+      )
+      const remoteReposts = filterOutBlockedAuthors(
+        await resolveAndCacheReposts(repostPage.events),
+        blocked,
+      )
 
+      const safeFollowing = excludeBlockedPubkeys(followingList, blocked)
       const originals = filterFollowingFeed(
         remotePosts,
         viewer,
-        followingList,
+        safeFollowing,
       )
       const reposts = remoteReposts.filter(
         (p) => p.repost && allowedAuthors.includes(p.repost.pubkey),
@@ -190,7 +208,7 @@ export function useFeed(
             comments: Math.max(post.comments, local?.comments ?? 0),
           }
         })
-        return rankPosts(withLocal)
+        return rankPosts(filterOutBlockedAuthors(withLocal, blocked))
       })
 
       return engaged.length
@@ -211,35 +229,43 @@ export function useFeed(
     setError(null)
     cursorRef.current = { until: null, authorChunk: 0, repostAuthorChunk: 0 }
 
-    const allowedAuthors = [viewerPubkey, ...followingList]
+    const blocked = await getBlockedSet(viewerPubkey)
+    const safeFollowing = excludeBlockedPubkeys(followingList, blocked)
+    const allowedAuthors = [viewerPubkey, ...safeFollowing]
 
     try {
       const [cachedPosts, cachedReposts] = await Promise.all([
         filterFollowingFeed(
           await loadCachedPosts(),
           viewerPubkey,
-          followingList,
+          safeFollowing,
         ),
         loadCachedRepostFeedPosts(allowedAuthors),
       ])
-      const cachedFeed = mergeFeedItems(cachedPosts, cachedReposts)
+      const cachedFeed = filterOutBlockedAuthors(
+        mergeFeedItems(cachedPosts, cachedReposts),
+        blocked,
+      )
       if (cachedFeed.length > 0) {
         setPosts(rankPosts(cachedFeed))
       } else {
         setPosts([])
       }
 
-      await ingestPage(viewerPubkey, allowedAuthors, true)
+      await ingestPage(viewerPubkey, allowedAuthors, blocked, true)
     } catch (err) {
       const [cachedPosts, cachedReposts] = await Promise.all([
         filterFollowingFeed(
           await loadCachedPosts(),
           viewerPubkey,
-          followingList,
+          safeFollowing,
         ),
         loadCachedRepostFeedPosts(allowedAuthors),
       ])
-      const cachedFeed = mergeFeedItems(cachedPosts, cachedReposts)
+      const cachedFeed = filterOutBlockedAuthors(
+        mergeFeedItems(cachedPosts, cachedReposts),
+        blocked,
+      )
       if (cachedFeed.length > 0) {
         setPosts(rankPosts(cachedFeed))
         setError('Relays unreachable — showing cached following feed')
@@ -249,7 +275,7 @@ export function useFeed(
     } finally {
       setLoading(false)
     }
-  }, [viewerPubkey, followingList, ingestPage])
+  }, [viewerPubkey, followingList, ingestPage, blockedKey])
 
   const loadMore = useCallback(async () => {
     if (!viewerPubkey || !hasMore || loadingMoreRef.current || loading) return
@@ -257,8 +283,10 @@ export function useFeed(
     setLoadingMore(true)
     setError(null)
     try {
-      const allowedAuthors = [viewerPubkey, ...followingList]
-      await ingestPage(viewerPubkey, allowedAuthors, false)
+      const blocked = await getBlockedSet(viewerPubkey)
+      const safeFollowing = excludeBlockedPubkeys(followingList, blocked)
+      const allowedAuthors = [viewerPubkey, ...safeFollowing]
+      await ingestPage(viewerPubkey, allowedAuthors, blocked, false)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load more')
     } finally {

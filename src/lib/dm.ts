@@ -88,6 +88,9 @@ export async function blockPeer(
   })
   const threadKey = dmThreadKey(ownerPubkey, peerPubkey)
   await db.dmThreads.delete(threadKey)
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('aazaad:blocks-changed'))
+  }
 }
 
 export async function unblockPeer(
@@ -95,6 +98,9 @@ export async function unblockPeer(
   peerPubkey: string,
 ): Promise<void> {
   await db.dmBlocks.delete(dmBlockKey(ownerPubkey, peerPubkey))
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('aazaad:blocks-changed'))
+  }
 }
 
 export async function isAcceptedPeer(

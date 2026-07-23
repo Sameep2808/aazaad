@@ -39,6 +39,7 @@ function GridThumb({
     let cancelled = false
 
     async function load() {
+      if (post.mediaType === 'text' || !post.cid) return
       if (helia && ready) {
         try {
           const url = await loadCidAsObjectUrl(helia, post.cid, post.mimeType)
@@ -61,7 +62,29 @@ function GridThumb({
       cancelled = true
       if (revoked) URL.revokeObjectURL(revoked)
     }
-  }, [helia, ready, post.cid, post.mimeType])
+  }, [helia, ready, post.cid, post.mimeType, post.mediaType])
+
+  if (post.mediaType === 'text') {
+    return (
+      <button
+        type="button"
+        onClick={onSelect}
+        className={[
+          'relative flex aspect-square items-center justify-center overflow-hidden bg-zinc-900 p-2 text-left',
+          selected ? 'ring-2 ring-white ring-inset' : '',
+        ].join(' ')}
+      >
+        <p className="line-clamp-6 text-[10px] leading-snug text-zinc-200">
+          {post.caption || 'Text'}
+        </p>
+        {showRepostBadge && (
+          <span className="absolute left-1.5 top-1.5 rounded bg-black/60 p-0.5 text-white">
+            <Repeat2 className="h-3 w-3" />
+          </span>
+        )}
+      </button>
+    )
+  }
 
   return (
     <button

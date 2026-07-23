@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Heart, MessageCircle, Radio, Repeat2 } from 'lucide-react'
+import { Heart, MessageCircle, MoreHorizontal, Radio, Repeat2, ShieldBan, Trash2 } from 'lucide-react'
+import { useAuth } from '../context/AuthContext'
 import { useIPFSSeed } from '../hooks/useIPFSSeed'
 import {
   useOptimisticEngagement,
@@ -8,6 +9,13 @@ import {
 import { useProfiles } from '../hooks/useProfiles'
 import { useRepost } from '../hooks/useRepost'
 import { useNearEndScroll } from '../hooks/useNearEndScroll'
+import { blockUser } from '../lib/blocks'
+import { deleteOwnPost } from '../lib/deletions'
+import { db } from '../lib/db'
+import {
+  buildContactListEvent,
+  publishEvent,
+} from '../lib/nostr'
 import { feedItemKey, type FeedPost } from '../lib/posts'
 import type { ResolvedProfile } from '../lib/profiles'
 import { displayHandle } from '../lib/profiles'
@@ -34,6 +42,7 @@ export function PostCard({
   post,
   profile,
   reposterProfile,
+  onChanged,
   onEngage,
 }: {
   post: FeedPost
@@ -42,6 +51,7 @@ export function PostCard({
   onChanged?: () => void
   onEngage?: EngageHandler
 }) {
+  const { pubkey, signEvent } = useAuth()
   const {
     toggleSeed,
     busyCid: seedBusyCid,
@@ -67,6 +77,13 @@ export function PostCard({
   const [commentText, setCommentText] = useState('')
   const [showComment, setShowComment] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [blocking, setBlocking] = useState(false)
+
+  const isOwnPost = Boolean(pubkey && post.pubkey === pubkey && !post.repost)
+  const canBlockAuthor = Boolean(pubkey && post.pubkey !== pubkey)
+  const showMenu = isOwnPost || canBlockAuthor
 
   useEffect(() => {
     if (error) setMsg(error)
@@ -107,6 +124,60 @@ export function PostCard({
     }
   }
 
+  async function onDeletePost() {
+    if (!pubkey || !isOwnPost || deleting) return
+    const ok = window.confirm(
+      'Delete this post? It will be removed from this app and a delete request will be sent to relays.',
+    )
+    if (!ok) return
+    setDeleting(true)
+    setMsg(null)
+    setMenuOpen(false)
+    try {
+      await deleteOwnPost({
+        postId: post.id,
+        pubkey,
+        signEvent,
+      })
+      onChanged?.()
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : 'Failed to delete post')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  async function onBlockAuthor() {
+    if (!pubkey || !canBlockAuthor || blocking) return
+    const ok = window.confirm(
+      'Block this user? Their posts will be hidden from Home, Explore, and Reels.',
+    )
+    if (!ok) return
+    setBlocking(true)
+    setMsg(null)
+    setMenuOpen(false)
+    try {
+      // Best-effort unfollow so Home allowlist drops them too
+      const cached = await db.follows.get(pubkey)
+      if (cached?.following.includes(post.pubkey)) {
+        const list = cached.following.filter((pk) => pk !== post.pubkey)
+        const signed = await signEvent(buildContactListEvent(list))
+        await db.follows.put({
+          pubkey,
+          following: list,
+          updatedAt: Date.now(),
+        })
+        void publishEvent(signed)
+      }
+      await blockUser(pubkey, post.pubkey)
+      onChanged?.()
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : 'Failed to block user')
+    } finally {
+      setBlocking(false)
+    }
+  }
+
   const alreadyReposted = isReposted(post.id)
   const seeded = isSeeded(post.cid)
   const seedBusy = seedBusyCid === post.cid
@@ -130,15 +201,69 @@ export function PostCard({
           </span>
         </div>
       )}
-      <PostAuthorBar profile={profile} pubkey={post.pubkey} variant="feed" />
-      <DoubleTapLikeLayer
-        onLike={onDoubleTapLike}
-        onSingleTap={
-          post.mediaType === 'video' ? onSingleTapMedia : undefined
-        }
-      >
-        <AutoMedia ref={mediaRef} post={post} variant="feed" />
-      </DoubleTapLikeLayer>
+      <div className="relative flex items-center justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <PostAuthorBar profile={profile} pubkey={post.pubkey} variant="feed" />
+        </div>
+        {showMenu && (
+          <div className="relative shrink-0 pr-2">
+            <button
+              type="button"
+              disabled={deleting || blocking}
+              onClick={() => setMenuOpen((v) => !v)}
+              className="flex h-10 w-10 touch-manipulation items-center justify-center rounded-full text-zinc-400 active:bg-zinc-800"
+              aria-label="Post options"
+              aria-expanded={menuOpen}
+            >
+              <MoreHorizontal className="h-5 w-5" />
+            </button>
+            {menuOpen && (
+              <div className="absolute right-0 top-10 z-20 min-w-[10rem] overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900 shadow-lg">
+                {isOwnPost && (
+                  <button
+                    type="button"
+                    disabled={deleting}
+                    onClick={() => void onDeletePost()}
+                    className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-red-400 active:bg-zinc-800"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    {deleting ? 'Deleting…' : 'Delete post'}
+                  </button>
+                )}
+                {canBlockAuthor && (
+                  <button
+                    type="button"
+                    disabled={blocking}
+                    onClick={() => void onBlockAuthor()}
+                    className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-red-400 active:bg-zinc-800"
+                  >
+                    <ShieldBan className="h-4 w-4" />
+                    {blocking ? 'Blocking…' : 'Block user'}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      {post.mediaType === 'text' ? (
+        <DoubleTapLikeLayer onLike={onDoubleTapLike}>
+          <div className="px-4 py-3">
+            <p className="allow-select whitespace-pre-wrap text-[15px] leading-relaxed text-zinc-100">
+              {post.caption}
+            </p>
+          </div>
+        </DoubleTapLikeLayer>
+      ) : (
+        <DoubleTapLikeLayer
+          onLike={onDoubleTapLike}
+          onSingleTap={
+            post.mediaType === 'video' ? onSingleTapMedia : undefined
+          }
+        >
+          <AutoMedia ref={mediaRef} post={post} variant="feed" />
+        </DoubleTapLikeLayer>
+      )}
       <div className="space-y-2 px-4 pt-3">
         <div className="flex items-center gap-1">
           <button
@@ -171,9 +296,13 @@ export function PostCard({
             onClick={() => {
               void toggleRepost(post).then((result) => {
                 if (result === 'reposted') {
-                  noteSeeded(post.cid)
-                  void hydrateSeed([post.cid])
-                  setMsg('Reposted — auto-seeding this post')
+                  if (post.cid) {
+                    noteSeeded(post.cid)
+                    void hydrateSeed([post.cid])
+                    setMsg('Reposted — auto-seeding this post')
+                  } else {
+                    setMsg('Reposted')
+                  }
                 } else if (result === 'unreposted') {
                   setMsg('Removed repost')
                 }
@@ -192,24 +321,26 @@ export function PostCard({
                 ? 'Reposted'
                 : 'Repost'}
           </button>
-          <button
-            type="button"
-            disabled={seedBusy}
-            onClick={() => void onToggleSeed()}
-            className={[
-              'ml-auto flex min-h-11 touch-manipulation items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium disabled:opacity-50',
-              seeded
-                ? 'border-emerald-500/80 bg-emerald-900/50 text-emerald-300'
-                : 'border-zinc-700 bg-zinc-900/60 text-zinc-300',
-            ].join(' ')}
-            aria-pressed={seeded}
-          >
-            <Radio className="h-3.5 w-3.5" />
-            {seedBusy ? '…' : seeded ? 'Seeding' : 'Seed'}
-          </button>
+          {post.mediaType !== 'text' && post.cid && (
+            <button
+              type="button"
+              disabled={seedBusy}
+              onClick={() => void onToggleSeed()}
+              className={[
+                'ml-auto flex min-h-11 touch-manipulation items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium disabled:opacity-50',
+                seeded
+                  ? 'border-emerald-500/80 bg-emerald-900/50 text-emerald-300'
+                  : 'border-zinc-700 bg-zinc-900/60 text-zinc-300',
+              ].join(' ')}
+              aria-pressed={seeded}
+            >
+              <Radio className="h-3.5 w-3.5" />
+              {seedBusy ? '…' : seeded ? 'Seeding' : 'Seed'}
+            </button>
+          )}
         </div>
 
-        {post.caption && (
+        {post.mediaType !== 'text' && post.caption && (
           <p className="allow-select whitespace-pre-wrap text-sm text-zinc-200">
             {profile?.username && (
               <span className="mr-1.5 font-semibold">@{profile.username}</span>
@@ -320,6 +451,7 @@ export function Feed({
               post.repost ? getProfile(post.repost.pubkey) : undefined
             }
             onEngage={onEngage}
+            onChanged={onRefresh}
           />
         ))
       )}

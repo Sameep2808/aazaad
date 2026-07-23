@@ -12,6 +12,7 @@ import {
   loadCachedPostsByAuthor,
   mergePosts,
 } from '../lib/postCache'
+import { filterOutDeletedPosts } from '../lib/deletions'
 
 export interface UseUserPostsResult {
   posts: FeedPost[]
@@ -49,8 +50,10 @@ export function useUserPosts(pubkey: string | null | undefined): UseUserPostsRes
         .map(parseFeedPost)
         .filter((p): p is FeedPost => p !== null)
 
-      const merged = mergePosts(cached, remote).sort(
-        (a, b) => b.createdAt - a.createdAt,
+      const merged = await filterOutDeletedPosts(
+        mergePosts(cached, remote).sort(
+          (a, b) => b.createdAt - a.createdAt,
+        ),
       )
 
       const ids = merged.map((p) => p.id)

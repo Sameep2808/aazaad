@@ -34,8 +34,9 @@ export interface FeedPost {
   pubkey: string
   createdAt: number
   caption: string
+  /** Empty for text-only notes stored on Nostr relays */
   cid: string
-  mediaType: 'image' | 'video' | 'unknown'
+  mediaType: 'text' | 'image' | 'video' | 'unknown'
   mimeType: string | null
   gatewayUrl: string
   likes: number
@@ -53,6 +54,21 @@ export interface FeedPost {
 /** React list key — unique per original post OR per repost appearance */
 export function feedItemKey(post: FeedPost): string {
   return post.repost ? `repost:${post.repost.id}` : post.id
+}
+
+/** Twitter-style text note — lives on Nostr relays (no IPFS). */
+export function buildTextEventTemplate(text: string): EventTemplate {
+  const content = text.trim()
+  return {
+    kind: 1,
+    created_at: Math.floor(Date.now() / 1000),
+    content,
+    tags: [
+      ['t', 'aazaad'],
+      ['t', 'text'],
+      ['client', 'aazaad'],
+    ],
+  }
 }
 
 export function buildMediaEventTemplate(opts: {
@@ -104,6 +120,16 @@ export function buildMediaEventTemplate(opts: {
       ['client', 'aazaad'],
     ],
   }
+}
+
+function isAazaadRootTextNote(event: Event): boolean {
+  if (event.kind !== 1) return false
+  const hasReply = event.tags.some((t) => t[0] === 'e')
+  if (hasReply) return false
+  const tagged =
+    event.tags.some((t) => t[0] === 't' && t[1] === 'aazaad') ||
+    event.tags.some((t) => t[0] === 'client' && t[1] === 'aazaad')
+  return tagged && event.content.trim().length > 0
 }
 
 export function buildLikeEvent(target: Event): EventTemplate {
@@ -163,10 +189,12 @@ export function buildCommentEvent(target: Event, text: string): EventTemplate {
   }
 }
 
-function mediaTypeFromMime(mime: string | null, cidHint: string): FeedPost['mediaType'] {
+function mediaTypeFromMime(
+  mime: string | null,
+  cidHint: string,
+): Exclude<FeedPost['mediaType'], 'text'> {
   if (mime?.startsWith('video/')) return 'video'
   if (mime?.startsWith('image/')) return 'image'
-  // Heuristic: short-form kinds are video
   void cidHint
   return 'unknown'
 }
@@ -190,7 +218,24 @@ export function parseFeedPost(event: Event): FeedPost | null {
     if (tag[0] === 'url' && tag[1] && !cid) cid = extractCid(tag[1])
   }
 
-  if (!cid) return null
+  // Text-only aazaad notes (Nostr Kind 1, no IPFS)
+  if (!cid) {
+    if (!isAazaadRootTextNote(event)) return null
+    return {
+      id: event.id,
+      pubkey: event.pubkey,
+      createdAt: event.created_at,
+      caption: event.content.trim(),
+      cid: '',
+      mediaType: 'text',
+      mimeType: 'text/plain',
+      gatewayUrl: '',
+      likes: 0,
+      comments: 0,
+      score: 0,
+      raw: event,
+    }
+  }
 
   if (event.kind === 21 || event.kind === 22) {
     mime = mime ?? 'video/mp4'
@@ -213,7 +258,12 @@ export function parseFeedPost(event: Event): FeedPost | null {
     createdAt: event.created_at,
     caption,
     cid,
-    mediaType: mediaType === 'unknown' && mime?.startsWith('image/') ? 'image' : mediaType === 'unknown' ? 'video' : mediaType,
+    mediaType:
+      mediaType === 'unknown' && mime?.startsWith('image/')
+        ? 'image'
+        : mediaType === 'unknown'
+          ? 'video'
+          : mediaType,
     mimeType: mime,
     gatewayUrl: cidToGatewayUrl(cid, IPFS_GATEWAYS[0]),
     likes: 0,

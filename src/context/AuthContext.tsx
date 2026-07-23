@@ -22,6 +22,7 @@ import {
   loginWithPassword as unlockLocalAccount,
   listAccounts,
 } from '../lib/accounts'
+import { deleteAccountAndContent } from '../lib/deletions'
 import type { AccountRow } from '../lib/db'
 
 const SESSION_SK = 'aazaad:session-sk'
@@ -44,6 +45,8 @@ export interface AuthState {
   loginEphemeral: () => Promise<void>
   refreshAccounts: () => Promise<void>
   logout: () => void
+  /** Delete account locally + NIP-09 delete all posts/reposts on relays */
+  deleteAccount: () => Promise<void>
   signEvent: (template: EventTemplate) => Promise<Event>
   /** NIP-04 encrypt a DM for peer pubkey */
   encryptDm: (peerPubkey: string, plaintext: string) => Promise<string>
@@ -252,6 +255,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [method, secretKey],
   )
 
+  const deleteAccount = useCallback(async () => {
+    if (!pubkey) throw new Error('Not logged in')
+    await deleteAccountAndContent({ pubkey, signEvent })
+    logout()
+    await refreshAccounts()
+  }, [pubkey, signEvent, logout, refreshAccounts])
+
   const encryptDm = useCallback(
     async (peerPubkey: string, plaintext: string): Promise<string> => {
       if (method === 'nip07') {
@@ -304,6 +314,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loginEphemeral,
       refreshAccounts,
       logout,
+      deleteAccount,
       signEvent,
       encryptDm,
       decryptDm,
@@ -322,6 +333,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loginEphemeral,
       refreshAccounts,
       logout,
+      deleteAccount,
       signEvent,
       encryptDm,
       decryptDm,

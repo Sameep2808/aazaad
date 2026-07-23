@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import type { Event } from 'nostr-tools'
 import {
   buildMediaEventTemplate,
+  buildTextEventTemplate,
   parseFeedPost,
   scorePost,
   rankPosts,
@@ -77,6 +78,50 @@ describe('posts / feed algorithm', () => {
     const ranked = rankPosts(posts, 100 + 3600)
     expect(ranked[0].id).toBe('hot')
     expect(ranked[0].score).toBeGreaterThan(ranked[1].score)
+  })
+
+  it('builds and parses text-only Kind 1 notes', () => {
+    const template = buildTextEventTemplate('  free speech forever  ')
+    expect(template.kind).toBe(1)
+    expect(template.content).toBe('free speech forever')
+    expect(template.tags.some((t) => t[0] === 't' && t[1] === 'aazaad')).toBe(
+      true,
+    )
+
+    const event = {
+      id: '3'.repeat(64),
+      pubkey: 'a'.repeat(64),
+      created_at: 1_700_000_000,
+      kind: 1,
+      content: 'free speech forever',
+      tags: [
+        ['t', 'aazaad'],
+        ['t', 'text'],
+        ['client', 'aazaad'],
+      ],
+      sig: '2'.repeat(128),
+    } as Event
+
+    const post = parseFeedPost(event)
+    expect(post?.mediaType).toBe('text')
+    expect(post?.cid).toBe('')
+    expect(post?.caption).toBe('free speech forever')
+  })
+
+  it('ignores reply notes without media as feed posts', () => {
+    const event = {
+      id: '4'.repeat(64),
+      pubkey: 'a'.repeat(64),
+      created_at: 1,
+      kind: 1,
+      content: 'a reply',
+      tags: [
+        ['e', '1'.repeat(64), '', 'reply'],
+        ['t', 'aazaad'],
+      ],
+      sig: '2'.repeat(128),
+    } as Event
+    expect(parseFeedPost(event)).toBeNull()
   })
 
   it('counts likes by e-tag', () => {

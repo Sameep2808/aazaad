@@ -29,13 +29,14 @@ export interface ProfileStatsCacheRow {
   updatedAt: number
 }
 
-/** Locally cached media posts (for instant Home/Profile visibility). */
+/** Locally cached media / text posts (for instant Home/Profile visibility). */
 export interface CachedPostRow {
   id: string
   pubkey: string
   createdAt: number
+  /** Empty string for text-only Nostr notes */
   cid: string
-  mediaType: 'image' | 'video' | 'unknown'
+  mediaType: 'text' | 'image' | 'video' | 'unknown'
   mimeType: string | null
   caption: string
   eventJson: string
@@ -118,6 +119,13 @@ export interface DmAcceptedRow {
   acceptedAt: number
 }
 
+/** Local tombstone so NIP-09 deleted events are not re-cached from relays. */
+export interface DeletedEventRow {
+  id: string
+  pubkey: string
+  deletedAt: number
+}
+
 class AazaadDB extends Dexie {
   follows!: Table<FollowCacheRow, string>
   seeds!: Table<SeededCidRow, string>
@@ -131,6 +139,7 @@ class AazaadDB extends Dexie {
   dmThreads!: Table<DmThreadRow, string>
   dmBlocks!: Table<DmBlockRow, string>
   dmAccepted!: Table<DmAcceptedRow, string>
+  deletedEvents!: Table<DeletedEventRow, string>
 
   constructor() {
     super('aazaad')
@@ -228,6 +237,22 @@ class AazaadDB extends Dexie {
         'key, ownerPubkey, peerPubkey, folder, [ownerPubkey+folder], lastAt, updatedAt',
       dmBlocks: 'key, ownerPubkey, peerPubkey',
       dmAccepted: 'key, ownerPubkey, peerPubkey',
+    })
+    this.version(10).stores({
+      follows: 'pubkey, updatedAt',
+      seeds: 'cid, pinnedAt',
+      accounts: 'username, pubkey, createdAt',
+      profileStats: 'pubkey, updatedAt',
+      posts: 'id, pubkey, createdAt, cid, updatedAt',
+      profiles: 'pubkey, username, updatedAt',
+      reposts: 'id, reposterPubkey, originalEventId, createdAt, updatedAt',
+      myLikes: 'key, pubkey, postId, active, updatedAt',
+      dmMessages: 'id, ownerPubkey, peerPubkey, [ownerPubkey+peerPubkey], createdAt',
+      dmThreads:
+        'key, ownerPubkey, peerPubkey, folder, [ownerPubkey+folder], lastAt, updatedAt',
+      dmBlocks: 'key, ownerPubkey, peerPubkey',
+      dmAccepted: 'key, ownerPubkey, peerPubkey',
+      deletedEvents: 'id, pubkey, deletedAt',
     })
   }
 }

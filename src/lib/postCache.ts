@@ -1,5 +1,6 @@
 import type { Event } from 'nostr-tools'
 import { db, type CachedPostRow } from './db'
+import { filterOutDeletedPosts, isEventDeleted } from './deletions'
 import { parseFeedPost, type FeedPost } from './posts'
 
 export async function cachePostFromEvent(
@@ -8,6 +9,7 @@ export async function cachePostFromEvent(
 ): Promise<FeedPost | null> {
   const parsed = parseFeedPost(event)
   if (!parsed) return null
+  if (await isEventDeleted(parsed.id)) return null
 
   const existing = await db.posts.get(parsed.id)
   const likes = Math.max(
@@ -80,13 +82,15 @@ export function rowToFeedPost(row: CachedPostRow): FeedPost | null {
 
 export async function loadCachedPosts(): Promise<FeedPost[]> {
   const rows = await db.posts.orderBy('createdAt').reverse().toArray()
-  return rows.map(rowToFeedPost).filter((p): p is FeedPost => p !== null)
+  const posts = rows.map(rowToFeedPost).filter((p): p is FeedPost => p !== null)
+  return filterOutDeletedPosts(posts)
 }
 
 export async function loadCachedPostsByAuthor(pubkey: string): Promise<FeedPost[]> {
   const rows = await db.posts.where('pubkey').equals(pubkey).toArray()
   rows.sort((a, b) => b.createdAt - a.createdAt)
-  return rows.map(rowToFeedPost).filter((p): p is FeedPost => p !== null)
+  const posts = rows.map(rowToFeedPost).filter((p): p is FeedPost => p !== null)
+  return filterOutDeletedPosts(posts)
 }
 
 /** Merge posts by id, preferring newer createdAt / higher engagement. */

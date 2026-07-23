@@ -13,8 +13,11 @@ import {
   mergePosts,
   updateCachedEngagement,
 } from '../lib/postCache'
+import { filterOutDeletedPosts } from '../lib/deletions'
+import { filterOutBlockedAuthors, getBlockedSet } from '../lib/blocks'
 import { getMutualPubkeys, prioritizeMutualAuthors } from '../lib/mutuals'
 import { FEED_PAGE_SIZE } from '../lib/relayThrottle'
+import { useBlockedPubkeys } from './useBlockedPubkeys'
 
 export interface UseReelsResult {
   posts: FeedPost[]
@@ -51,7 +54,9 @@ export function useReels(
   const [error, setError] = useState<string | null>(null)
   const untilRef = useRef<number | null>(null)
   const mutualsRef = useRef<string[]>([])
+  const blockedRef = useRef<Set<string>>(new Set())
   const loadingMoreRef = useRef(false)
+  const { blockedKey } = useBlockedPubkeys(viewerPubkey)
 
   const followingKey = useMemo(
     () => [...following].sort().join(','),
@@ -98,9 +103,16 @@ export function useReels(
         limit: FEED_PAGE_SIZE,
       })
       await cachePostsFromEvents(page.events)
-      const remote = page.events
-        .map(parseFeedPost)
-        .filter((p): p is FeedPost => p !== null)
+      const remote = filterOutBlockedAuthors(
+        (
+          await filterOutDeletedPosts(
+            page.events
+              .map(parseFeedPost)
+              .filter((p): p is FeedPost => p !== null),
+          )
+        ).filter((p) => p.mediaType !== 'text'),
+        blockedRef.current,
+      )
 
       const ids = remote.map((p) => p.id)
       const [likes, comments] = await Promise.all([
@@ -119,7 +131,7 @@ export function useReels(
       setHasMore(!page.exhausted && page.nextUntil != null)
 
       setPosts((prev) => {
-        const merged = reset ? mergePosts(prev, engaged) : mergePosts(prev, engaged)
+        const merged = mergePosts(prev, engaged)
         const prevById = new Map(prev.map((p) => [p.id, p]))
         const withLocal = merged.map((post) => {
           const local = prevById.get(post.id)
@@ -129,7 +141,9 @@ export function useReels(
             comments: Math.max(post.comments, local?.comments ?? 0),
           }
         })
-        return orderPosts(withLocal)
+        return orderPosts(
+          filterOutBlockedAuthors(withLocal, blockedRef.current),
+        )
       })
     },
     [orderPosts],
@@ -140,6 +154,8 @@ export function useReels(
     setError(null)
     untilRef.current = null
     try {
+      blockedRef.current = await getBlockedSet(viewerPubkey)
+
       if (viewerPubkey && followingList.length > 0) {
         mutualsRef.current = await getMutualPubkeys(
           viewerPubkey,
@@ -149,14 +165,20 @@ export function useReels(
         mutualsRef.current = []
       }
 
-      const cached = await loadCachedPosts()
+      const cached = filterOutBlockedAuthors(
+        await loadCachedPosts(),
+        blockedRef.current,
+      )
       if (cached.length > 0) {
         setPosts(orderPosts(cached))
       }
 
       await appendPage(true)
     } catch (err) {
-      const cached = await loadCachedPosts()
+      const cached = filterOutBlockedAuthors(
+        await loadCachedPosts(),
+        blockedRef.current,
+      )
       if (cached.length > 0) {
         setPosts(orderPosts(cached))
         setError('Relays unreachable — showing cached reels')
@@ -166,7 +188,7 @@ export function useReels(
     } finally {
       setLoading(false)
     }
-  }, [viewerPubkey, followingList, orderPosts, appendPage])
+  }, [viewerPubkey, followingList, orderPosts, appendPage, blockedKey])
 
   const loadMore = useCallback(async () => {
     if (!hasMore || loadingMoreRef.current || loading) return

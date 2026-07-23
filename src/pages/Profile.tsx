@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { useHelia } from '../context/HeliaContext'
 import { useProfileStats } from '../hooks/useProfileStats'
@@ -10,12 +10,14 @@ import { ProfileHeader } from '../components/ProfileHeader'
 import { ProfilePostsGrid } from '../components/ProfilePostsGrid'
 
 export function Profile() {
-  const { pubkey, npub, username, ready, logout } = useAuth()
+  const { pubkey, npub, username, ready, logout, deleteAccount } = useAuth()
   const { ready: heliaReady, error: heliaError, retry } = useHelia()
   const stats = useProfileStats(pubkey)
   const userPosts = useUserPosts(pubkey)
   const userReposts = useUserReposts(pubkey)
   const photo = useUpdateProfilePhoto()
+  const [deletingAccount, setDeletingAccount] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   const postsCount = Math.max(stats.postsCount, userPosts.posts.length)
 
@@ -70,7 +72,21 @@ export function Profile() {
               stats.loading || userPosts.loading || userReposts.loading
             }
             photoBusy={photo.busy}
+            deletingAccount={deletingAccount}
             onLogout={logout}
+            onDeleteAccount={() => {
+              const ok = window.confirm(
+                'Delete your account and all of your posts? This removes your local login and sends delete requests for your posts to relays. This cannot be undone.',
+              )
+              if (!ok) return
+              setDeleteError(null)
+              setDeletingAccount(true)
+              void deleteAccount()
+                .catch((err: Error) =>
+                  setDeleteError(err.message || 'Failed to delete account'),
+                )
+                .finally(() => setDeletingAccount(false))
+            }}
             onRefresh={() => {
               void stats.refresh()
               void userPosts.refresh()
@@ -86,6 +102,9 @@ export function Profile() {
           )}
           {photo.error && (
             <p className="text-sm text-red-400">{photo.error}</p>
+          )}
+          {deleteError && (
+            <p className="text-sm text-red-400">{deleteError}</p>
           )}
 
           <ProfilePostsGrid

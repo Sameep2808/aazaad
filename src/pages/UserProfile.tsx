@@ -6,6 +6,7 @@ import { useProfileStats } from '../hooks/useProfileStats'
 import { useUserPosts } from '../hooks/useUserPosts'
 import { useUserReposts } from '../hooks/useUserReposts'
 import { useFollow } from '../hooks/useFollow'
+import { useBlockedPubkeys } from '../hooks/useBlockedPubkeys'
 import { decodePubkey, hexToNpub } from '../lib/nostr'
 import {
   displayHandle,
@@ -73,6 +74,13 @@ export function UserProfile() {
   const userPosts = useUserPosts(targetPubkey)
   const userReposts = useUserReposts(targetPubkey)
   const follow = useFollow(targetPubkey)
+  const blocks = useBlockedPubkeys(me)
+  const [blockBusy, setBlockBusy] = useState(false)
+  const [blockError, setBlockError] = useState<string | null>(null)
+
+  const isBlockedUser = Boolean(
+    targetPubkey && blocks.isBlocked(targetPubkey),
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -135,6 +143,30 @@ export function UserProfile() {
     }
   }
 
+  async function onToggleBlock() {
+    if (!me || !targetPubkey || isSelf || blockBusy) return
+    setBlockBusy(true)
+    setBlockError(null)
+    try {
+      if (isBlockedUser) {
+        await blocks.unblock(targetPubkey)
+      } else {
+        const ok = window.confirm(
+          'Block this user? Their posts will be hidden from Home, Explore, and Reels, and you won’t receive their messages.',
+        )
+        if (!ok) return
+        if (follow.following) {
+          await follow.toggle()
+        }
+        await blocks.block(targetPubkey)
+      }
+    } catch (err) {
+      setBlockError(err instanceof Error ? err.message : 'Block failed')
+    } finally {
+      setBlockBusy(false)
+    }
+  }
+
   return (
     <div className="flex flex-1 flex-col gap-5 px-4 py-4">
       <div className="flex items-center gap-3">
@@ -164,29 +196,46 @@ export function UserProfile() {
               </Link>
             ) : (
               <>
+                {!isBlockedUser && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={!follow.canFollow || follow.busy}
+                      onClick={() => void follow.toggle()}
+                      className={[
+                        'rounded-lg px-4 py-1.5 text-xs font-semibold disabled:opacity-50',
+                        follow.following
+                          ? 'border border-zinc-600 text-zinc-200'
+                          : 'bg-white text-zinc-950',
+                      ].join(' ')}
+                    >
+                      {follow.busy
+                        ? '…'
+                        : follow.following
+                          ? 'Following'
+                          : 'Follow'}
+                    </button>
+                    <Link
+                      to={`/messages/${npub}`}
+                      className="rounded-lg border border-zinc-600 px-3 py-1.5 text-xs font-semibold text-zinc-200"
+                    >
+                      Message
+                    </Link>
+                  </>
+                )}
                 <button
                   type="button"
-                  disabled={!follow.canFollow || follow.busy}
-                  onClick={() => void follow.toggle()}
+                  disabled={!me || blockBusy}
+                  onClick={() => void onToggleBlock()}
                   className={[
-                    'rounded-lg px-4 py-1.5 text-xs font-semibold disabled:opacity-50',
-                    follow.following
-                      ? 'border border-zinc-600 text-zinc-200'
-                      : 'bg-white text-zinc-950',
+                    'rounded-lg border px-3 py-1.5 text-xs font-semibold disabled:opacity-50',
+                    isBlockedUser
+                      ? 'border-zinc-600 text-zinc-200'
+                      : 'border-red-900/60 text-red-400',
                   ].join(' ')}
                 >
-                  {follow.busy
-                    ? '…'
-                    : follow.following
-                      ? 'Following'
-                      : 'Follow'}
+                  {blockBusy ? '…' : isBlockedUser ? 'Unblock' : 'Block'}
                 </button>
-                <Link
-                  to={`/messages/${npub}`}
-                  className="rounded-lg border border-zinc-600 px-3 py-1.5 text-xs font-semibold text-zinc-200"
-                >
-                  Message
-                </Link>
               </>
             )}
           </div>
@@ -256,6 +305,7 @@ export function UserProfile() {
         <p className="text-xs text-zinc-500">Loading profile…</p>
       )}
       {follow.error && <p className="text-sm text-amber-400">{follow.error}</p>}
+      {blockError && <p className="text-sm text-red-400">{blockError}</p>}
       {stats.error && <p className="text-sm text-amber-400">{stats.error}</p>}
 
       {listTab === 'followers' && (
@@ -273,16 +323,25 @@ export function UserProfile() {
         />
       )}
 
-      <ProfilePostsGrid
-        posts={userPosts.posts}
-        reposts={userReposts.posts}
-        loading={userPosts.loading}
-        repostsLoading={userReposts.loading}
-        error={userPosts.error}
-        repostsError={userReposts.error}
-        onRefreshPosts={() => void userPosts.refresh()}
-        onRefreshReposts={() => void userReposts.refresh()}
-      />
+      {isBlockedUser ? (
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 px-4 py-8 text-center">
+          <p className="text-sm text-zinc-300">You blocked this user</p>
+          <p className="mt-1 text-xs text-zinc-500">
+            Their posts are hidden from Home, Explore, and Reels.
+          </p>
+        </div>
+      ) : (
+        <ProfilePostsGrid
+          posts={userPosts.posts}
+          reposts={userReposts.posts}
+          loading={userPosts.loading}
+          repostsLoading={userReposts.loading}
+          error={userPosts.error}
+          repostsError={userReposts.error}
+          onRefreshPosts={() => void userPosts.refresh()}
+          onRefreshReposts={() => void userReposts.refresh()}
+        />
+      )}
     </div>
   )
 }

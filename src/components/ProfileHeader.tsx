@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Camera, Check, Copy } from 'lucide-react'
+import { Camera, Check, Copy, LogOut, MoreHorizontal, Trash2 } from 'lucide-react'
 import type { ProfilePerson } from '../hooks/useProfileStats'
 import type { ResolvedProfile } from '../lib/profiles'
 import { UserAvatar } from './UserAvatar'
@@ -20,7 +20,9 @@ interface ProfileHeaderProps {
   following: ProfilePerson[]
   loading: boolean
   photoBusy?: boolean
+  deletingAccount?: boolean
   onLogout: () => void
+  onDeleteAccount: () => void
   onRefresh: () => void
   onChangePhoto: (file: File) => Promise<void>
 }
@@ -78,14 +80,18 @@ export function ProfileHeader({
   following,
   loading,
   photoBusy,
+  deletingAccount,
   onLogout,
+  onDeleteAccount,
   onRefresh,
   onChangePhoto,
 }: ProfileHeaderProps) {
   const [listTab, setListTab] = useState<ListTab>(null)
   const [photoError, setPhotoError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
   const displayName = displayHandle(
     profile ?? {
       pubkey: '',
@@ -99,6 +105,22 @@ export function ProfileHeader({
   useEffect(() => {
     setPhotoError(null)
   }, [profile?.pictureCid])
+
+  useEffect(() => {
+    if (!menuOpen) return
+    function onPointerDown(event: MouseEvent | TouchEvent) {
+      const target = event.target as Node | null
+      if (menuRef.current && target && !menuRef.current.contains(target)) {
+        setMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    document.addEventListener('touchstart', onPointerDown)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('touchstart', onPointerDown)
+    }
+  }, [menuOpen])
 
   async function copyNpub() {
     if (!npub) return
@@ -170,13 +192,55 @@ export function ProfileHeader({
             <h1 className="truncate text-xl font-semibold tracking-tight">
               {displayName}
             </h1>
-            <button
-              type="button"
-              onClick={onRefresh}
-              className="shrink-0 text-xs text-zinc-400 underline"
-            >
-              {loading ? 'Refreshing…' : 'Refresh'}
-            </button>
+            <div className="flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                onClick={onRefresh}
+                className="px-1 text-xs text-zinc-400 underline"
+              >
+                {loading ? 'Refreshing…' : 'Refresh'}
+              </button>
+              <div className="relative" ref={menuRef}>
+                <button
+                  type="button"
+                  disabled={deletingAccount}
+                  onClick={() => setMenuOpen((v) => !v)}
+                  className="flex h-10 w-10 touch-manipulation items-center justify-center rounded-full text-zinc-300 active:bg-zinc-800 disabled:opacity-50"
+                  aria-label="Account options"
+                  aria-expanded={menuOpen}
+                >
+                  <MoreHorizontal className="h-5 w-5" />
+                </button>
+                {menuOpen && (
+                  <div className="absolute right-0 top-11 z-30 min-w-[11.5rem] overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-lg">
+                    <button
+                      type="button"
+                      disabled={deletingAccount}
+                      onClick={() => {
+                        setMenuOpen(false)
+                        onLogout()
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-zinc-100 active:bg-zinc-800 disabled:opacity-50"
+                    >
+                      <LogOut className="h-4 w-4" />
+                      Log out
+                    </button>
+                    <button
+                      type="button"
+                      disabled={deletingAccount}
+                      onClick={() => {
+                        setMenuOpen(false)
+                        onDeleteAccount()
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-red-400 active:bg-zinc-800 disabled:opacity-50"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      {deletingAccount ? 'Deleting…' : 'Delete account'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
 
           <div className="grid grid-cols-3 gap-2 text-center">
@@ -254,14 +318,6 @@ export function ProfileHeader({
           empty="Not following anyone yet."
         />
       )}
-
-      <button
-        type="button"
-        onClick={onLogout}
-        className="w-full rounded-lg border border-zinc-700 px-4 py-3 text-sm font-medium text-zinc-100"
-      >
-        Log out
-      </button>
     </div>
   )
 }
