@@ -4,14 +4,12 @@ import { useSocialGraph } from './useSocialGraph'
 import {
   acceptRequest,
   blockPeer,
-  buildEncryptedDmEvent,
-  cacheAndIndexDm,
   isBlocked,
   loadMessages,
   markThreadRead,
-  publishEvent,
   resolveDmFolder,
 } from '../lib/dm'
+import { sendEncryptedDm } from '../lib/sendDm'
 import type { DmMessageRow } from '../lib/db'
 import { db } from '../lib/db'
 
@@ -61,15 +59,14 @@ export function useDmChat(peerPubkey: string | null) {
       setSending(true)
       setError(null)
       try {
-        const ciphertext = await encryptDm(peer, trimmed)
-        const signed = await signEvent(buildEncryptedDmEvent(peer, ciphertext))
-        await cacheAndIndexDm({
+        await sendEncryptedDm({
           ownerPubkey: pubkey,
-          event: signed,
+          peerPubkey: peer,
           plaintext: trimmed,
           following,
+          encryptDm,
+          signEvent,
         })
-        void publishEvent(signed)
         await reload()
         return true
       } catch (err) {

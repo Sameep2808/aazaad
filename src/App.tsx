@@ -9,6 +9,7 @@ import { Profile } from './pages/Profile'
 import { UserProfile } from './pages/UserProfile'
 import { Messages } from './pages/Messages'
 import { ChatThread } from './pages/ChatThread'
+import { PostDetail } from './pages/PostDetail'
 
 function App() {
   const location = useLocation()
@@ -16,8 +17,9 @@ function App() {
   const isExplore = location.pathname === '/explore'
   const isUserProfile = location.pathname.startsWith('/u/')
   const isMessages = location.pathname.startsWith('/messages')
+  const isPostDetail = location.pathname.startsWith('/p/')
   const showAppHeader =
-    !isReels && !isExplore && !isUserProfile && !isMessages
+    !isReels && !isExplore && !isUserProfile && !isMessages && !isPostDetail
 
   return (
     <div
@@ -50,6 +52,7 @@ function App() {
           <Route path="/messages" element={<Messages />} />
           <Route path="/messages/:id" element={<ChatThread />} />
           <Route path="/u/:id" element={<UserProfile />} />
+          <Route path="/p/:id" element={<PostDetail />} />
           <Route path="/reels" element={<Reels />} />
           <Route path="/upload" element={<Upload />} />
           <Route path="/profile" element={<Profile />} />

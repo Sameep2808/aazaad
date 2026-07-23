@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   createEphemeralIdentity,
   decodePubkey,
@@ -9,6 +9,14 @@ import { db } from './db'
 import { createAccount } from './accounts'
 import { parseUserQuery, searchUsers } from './userSearch'
 import { saveProfileRow } from './profiles'
+
+vi.mock('./nostr', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./nostr')>()
+  return {
+    ...actual,
+    publishEvent: vi.fn().mockResolvedValue([]),
+  }
+})
 
 describe('decodePubkey / contact list', () => {
   it('decodes npub and hex', () => {

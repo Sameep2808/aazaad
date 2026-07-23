@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Heart, MessageCircle, PlusSquare, Radio, Repeat2 } from 'lucide-react'
+import { Heart, MessageCircle, PlusSquare, Radio, Repeat2, Send } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useIPFSSeed } from '../hooks/useIPFSSeed'
 import {
@@ -11,9 +11,11 @@ import { useRepost } from '../hooks/useRepost'
 import { feedItemKey, type FeedPost } from '../lib/posts'
 import type { ResolvedProfile } from '../lib/profiles'
 import { displayHandle } from '../lib/profiles'
+import { profilePath } from '../lib/userSearch'
 import { AutoMedia, type AutoMediaHandle } from './AutoMedia'
 import { DoubleTapLikeLayer } from './DoubleTapLikeLayer'
 import { PostAuthorBar } from './UserAvatar'
+import { ShareSheet } from './ShareSheet'
 
 interface ReelsProps {
   posts: FeedPost[]
@@ -64,6 +66,7 @@ function ReelSlide({
   const [showComment, setShowComment] = useState(false)
   const [commentText, setCommentText] = useState('')
   const [msg, setMsg] = useState<string | null>(null)
+  const [shareOpen, setShareOpen] = useState(false)
 
   useEffect(() => {
     if (error) setMsg(error)
@@ -123,15 +126,21 @@ function ReelSlide({
         {post.repost && (
           <p className="pointer-events-auto mb-1 flex items-center gap-1 text-xs font-medium text-white/70">
             <Repeat2 className="h-3.5 w-3.5" />
-            {displayHandle(
-              reposterProfile ?? {
-                pubkey: post.repost.pubkey,
-                username: null,
-                displayName: null,
-                pictureUrl: null,
-                pictureCid: null,
-              },
-            )}{' '}
+            <Link
+              to={profilePath(post.repost.pubkey)}
+              className="truncate font-medium text-white active:opacity-80"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {displayHandle(
+                reposterProfile ?? {
+                  pubkey: post.repost.pubkey,
+                  username: null,
+                  displayName: null,
+                  pictureUrl: null,
+                  pictureCid: null,
+                },
+              )}
+            </Link>{' '}
             reposted
           </p>
         )}
@@ -172,6 +181,18 @@ function ReelSlide({
             <MessageCircle className="h-7 w-7" />
           </span>
           <span className="text-xs font-medium">{comments}</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setShareOpen(true)}
+          className="flex touch-manipulation flex-col items-center gap-1 text-white active:opacity-70"
+          aria-label="Share post"
+        >
+          <span className="rounded-full bg-black/35 p-3 backdrop-blur-sm">
+            <Send className="h-7 w-7" />
+          </span>
+          <span className="text-[10px] font-medium">Share</span>
         </button>
 
         <button
@@ -246,6 +267,15 @@ function ReelSlide({
           </button>
         </div>
       )}
+
+      <ShareSheet
+        post={post}
+        open={shareOpen}
+        onClose={() => setShareOpen(false)}
+        onShared={(count) =>
+          setMsg(count === 1 ? 'Sent to 1 person' : `Sent to ${count} people`)
+        }
+      />
     </section>
   )
 }

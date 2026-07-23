@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext'
 import { useDmChat } from '../hooks/useDmChat'
 import { useProfiles } from '../hooks/useProfiles'
 import { UserAvatar } from '../components/UserAvatar'
+import { MessageContent } from '../components/MessageContent'
 import { displayHandle } from '../lib/profiles'
 import { decodePubkey, hexToNpub } from '../lib/nostr'
 import { profilePath } from '../lib/userSearch'
@@ -174,7 +175,7 @@ export function ChatThread() {
                   ].join(' ')}
                 >
                   <p className="allow-select whitespace-pre-wrap break-words">
-                    {msg.content}
+                    <MessageContent content={msg.content} />
                   </p>
                   <p
                     className={[

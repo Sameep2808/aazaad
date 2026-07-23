@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useHelia } from '../context/HeliaContext'
 import { loadCidAsObjectUrl } from '../lib/ipfs'
 import { IPFS_GATEWAYS, cidToGatewayUrl } from '../lib/media'
@@ -7,6 +8,7 @@ import {
   initialsFromProfile,
   type ResolvedProfile,
 } from '../lib/profiles'
+import { profilePath } from '../lib/userSearch'
 
 interface UserAvatarProps {
   profile?: ResolvedProfile | null
@@ -104,7 +106,7 @@ interface PostAuthorBarProps {
   variant?: 'feed' | 'reel'
 }
 
-/** Instagram-style author row: avatar + @userid */
+/** Instagram-style author row: avatar + @userid → user profile */
 export function PostAuthorBar({
   profile,
   pubkey,
@@ -119,24 +121,32 @@ export function PostAuthorBar({
       pictureCid: null,
     },
   )
+  const to = profilePath(pubkey)
 
   if (variant === 'reel') {
     return (
-      <div className="flex items-center gap-2">
+      <Link
+        to={to}
+        className="flex items-center gap-2 active:opacity-80"
+        onClick={(e) => e.stopPropagation()}
+      >
         <UserAvatar profile={profile} size="sm" className="ring-1 ring-white/40" />
         <span className="text-sm font-semibold text-white drop-shadow">
           {handle}
         </span>
-      </div>
+      </Link>
     )
   }
 
   return (
-    <div className="flex items-center gap-2.5 px-4 py-2.5">
+    <Link
+      to={to}
+      className="flex min-w-0 items-center gap-2.5 px-4 py-2.5 active:opacity-80"
+    >
       <UserAvatar profile={profile} size="md" />
       <div className="min-w-0">
         <p className="truncate text-sm font-semibold text-zinc-100">{handle}</p>
       </div>
-    </div>
+    </Link>
   )
 }

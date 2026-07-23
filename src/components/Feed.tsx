@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Heart, MessageCircle, MoreHorizontal, Radio, Repeat2, ShieldBan, Trash2 } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { Heart, MessageCircle, MoreHorizontal, Radio, Repeat2, Send, ShieldBan, Trash2 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useIPFSSeed } from '../hooks/useIPFSSeed'
 import {
@@ -19,9 +20,11 @@ import {
 import { feedItemKey, type FeedPost } from '../lib/posts'
 import type { ResolvedProfile } from '../lib/profiles'
 import { displayHandle } from '../lib/profiles'
+import { profilePath } from '../lib/userSearch'
 import { AutoMedia, type AutoMediaHandle } from './AutoMedia'
 import { DoubleTapLikeLayer } from './DoubleTapLikeLayer'
 import { PostAuthorBar } from './UserAvatar'
+import { ShareSheet } from './ShareSheet'
 
 interface FeedProps {
   posts: FeedPost[]
@@ -80,6 +83,7 @@ export function PostCard({
   const [menuOpen, setMenuOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [blocking, setBlocking] = useState(false)
+  const [shareOpen, setShareOpen] = useState(false)
 
   const isOwnPost = Boolean(pubkey && post.pubkey === pubkey && !post.repost)
   const canBlockAuthor = Boolean(pubkey && post.pubkey !== pubkey)
@@ -187,7 +191,10 @@ export function PostCard({
       {post.repost && (
         <div className="flex items-center gap-1.5 px-4 pt-2 text-xs font-medium text-zinc-400">
           <Repeat2 className="h-3.5 w-3.5" />
-          <span>
+          <Link
+            to={profilePath(post.repost.pubkey)}
+            className="truncate font-medium text-zinc-300 active:opacity-80"
+          >
             {displayHandle(
               reposterProfile ?? {
                 pubkey: post.repost.pubkey,
@@ -196,9 +203,9 @@ export function PostCard({
                 pictureUrl: null,
                 pictureCid: null,
               },
-            )}{' '}
-            reposted
-          </span>
+            )}
+          </Link>
+          <span>reposted</span>
         </div>
       )}
       <div className="relative flex items-center justify-between gap-2">
@@ -321,6 +328,14 @@ export function PostCard({
                 ? 'Reposted'
                 : 'Repost'}
           </button>
+          <button
+            type="button"
+            onClick={() => setShareOpen(true)}
+            className="flex min-h-11 min-w-11 touch-manipulation items-center gap-1.5 px-2 text-sm text-zinc-200 active:opacity-70"
+            aria-label="Share post"
+          >
+            <Send className="h-6 w-6" />
+          </button>
           {post.mediaType !== 'text' && post.cid && (
             <button
               type="button"
@@ -343,7 +358,12 @@ export function PostCard({
         {post.mediaType !== 'text' && post.caption && (
           <p className="allow-select whitespace-pre-wrap text-sm text-zinc-200">
             {profile?.username && (
-              <span className="mr-1.5 font-semibold">@{profile.username}</span>
+              <Link
+                to={profilePath(post.pubkey)}
+                className="mr-1.5 font-semibold text-zinc-100 active:opacity-80"
+              >
+                @{profile.username}
+              </Link>
             )}
             {post.caption}
           </p>
@@ -377,6 +397,15 @@ export function PostCard({
 
         {msg && <p className="text-xs text-zinc-400">{msg}</p>}
       </div>
+
+      <ShareSheet
+        post={post}
+        open={shareOpen}
+        onClose={() => setShareOpen(false)}
+        onShared={(count) =>
+          setMsg(count === 1 ? 'Sent to 1 person' : `Sent to ${count} people`)
+        }
+      />
     </article>
   )
 }
