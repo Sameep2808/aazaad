@@ -24,6 +24,7 @@ import {
 import { feedItemKey, type FeedPost } from '../lib/posts'
 import type { ResolvedProfile } from '../lib/profiles'
 import { displayHandle } from '../lib/profiles'
+import { formatPostDateTime, postDateTimeAttr } from '../lib/time'
 import { profilePath } from '../lib/userSearch'
 import { AutoMedia, type AutoMediaHandle } from './AutoMedia'
 import { DoubleTapLikeLayer } from './DoubleTapLikeLayer'
@@ -374,6 +375,13 @@ export function PostCard({
             {post.caption}
           </p>
         )}
+
+        <time
+          dateTime={postDateTimeAttr(post.createdAt)}
+          className="block text-xs text-zinc-500"
+        >
+          {formatPostDateTime(post.createdAt)}
+        </time>
 
         {msg && <p className="text-xs text-zinc-400">{msg}</p>}
       </div>

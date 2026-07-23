@@ -11,6 +11,7 @@ import { useRepost } from '../hooks/useRepost'
 import { feedItemKey, type FeedPost } from '../lib/posts'
 import type { ResolvedProfile } from '../lib/profiles'
 import { displayHandle } from '../lib/profiles'
+import { formatPostDateTime, postDateTimeAttr } from '../lib/time'
 import { profilePath } from '../lib/userSearch'
 import { AutoMedia, type AutoMediaHandle } from './AutoMedia'
 import { DoubleTapLikeLayer } from './DoubleTapLikeLayer'
@@ -152,6 +153,12 @@ function ReelSlide({
             {post.caption}
           </p>
         )}
+        <time
+          dateTime={postDateTimeAttr(post.createdAt)}
+          className="mt-1 block text-xs text-white/55 drop-shadow"
+        >
+          {formatPostDateTime(post.createdAt)}
+        </time>
         {msg && <p className="mt-1 text-xs text-white/70">{msg}</p>}
       </div>
 
