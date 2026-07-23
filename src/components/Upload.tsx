@@ -113,10 +113,16 @@ export function Upload() {
     try {
       // Wait for circuit-relay / WebRTC so followers have something to dial
       let providerAddrs: string[] = []
+      let addrWarning: string | null = null
+      
       try {
         providerAddrs = await waitForMultiaddrs(15_000)
-      } catch {
-        providerAddrs = []
+        if (providerAddrs.length === 0) {
+          addrWarning = 'Warning: No peer addresses available. Followers may need to use IPFS gateways to load your media.'
+        }
+      } catch (err) {
+        addrWarning = 'Warning: Could not establish peer connections. Followers may need to use IPFS gateways to load your media.'
+        console.warn('Failed to get multiaddrs:', err)
       }
 
       // Re-announce once dialable (DHT is best-effort; multiaddrs are the P2P path)
@@ -135,11 +141,19 @@ export function Upload() {
       })
       const signed = await signEvent(template)
       await cachePostFromEvent(signed)
-      try {
-        await publishEvent(signed)
-      } catch (relayErr) {
-        console.warn('Relay publish failed; post cached locally', relayErr)
+      
+      // Publish to relays - this is critical so followers can see the post
+      const acceptedRelays = await publishEvent(signed)
+      if (acceptedRelays.length === 0) {
+        throw new Error(
+          'Could not reach any Nostr relays. Check your connection and try again. Your post is saved locally and will be published when you retry.'
+        )
       }
+      
+      if (addrWarning) {
+        setError(addrWarning)
+      }
+      
       setPublishedId(signed.id)
       setStage('done')
     } catch (err) {
@@ -161,11 +175,15 @@ export function Upload() {
       const template = buildTextEventTemplate(body)
       const signed = await signEvent(template)
       await cachePostFromEvent(signed)
-      try {
-        await publishEvent(signed)
-      } catch (relayErr) {
-        console.warn('Relay publish failed; post cached locally', relayErr)
+      
+      // Publish to relays - this is critical so followers can see the post
+      const acceptedRelays = await publishEvent(signed)
+      if (acceptedRelays.length === 0) {
+        throw new Error(
+          'Could not reach any Nostr relays. Check your connection and try again. Your post is saved locally and will be published when you retry.'
+        )
       }
+      
       setPublishedId(signed.id)
       setStage('done')
     } catch (err) {
@@ -361,8 +379,10 @@ export function Upload() {
         <div className="space-y-3 text-center">
           <p className="text-sm text-emerald-400">
             {mode === 'text'
-              ? 'Your text is live for everyone to read'
-              : 'Shared! Keep the app open so friends can load your photo or video'}
+              ? 'Your text is live for everyone to read!'
+              : publishedId && error?.includes('Warning')
+                ? 'Posted! Keep this tab open so followers can load your media via peer-to-peer. IPFS gateways will also work.'
+                : 'Posted! Keep this tab open so followers can load your media quickly via peer-to-peer.'}
           </p>
           {publishedId && (
             <p className="break-all font-mono text-[10px] text-zinc-500">
